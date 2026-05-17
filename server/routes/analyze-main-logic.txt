@@ -1,0 +1,12 @@
+Main Logic from analyze.js
+=========================
+
+- Defines an Express route (POST /api/analyze) that receives code and language from the client.
+- Depending on the language (Python, JavaScript, Java, C/C++), it:
+  1. Runs static analysis using language-specific tools (Pylint, ESLint, Checkstyle, Tree-sitter).
+  2. Calls Gemini AI for advanced code review and suggestions.
+  3. Fetches any previously rejected feedback for the same code/language from Supabase.
+- Combines static and AI suggestions, then sends them back in the response.
+- Handles errors and supports only specific languages (Python, JavaScript, Java, C, C++).
+
+This route is the core backend logic for analyzing code and providing feedback in your project.

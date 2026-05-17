@@ -1,0 +1,52 @@
+body {
+  font-family: sans-serif;
+  background: #b7d8f9;
+  margin: 0;
+  padding: 20px;
+}
+
+.container {
+  max-width: 960px;
+  margin: auto;
+}
+
+h1 {
+  text-align: center;
+}
+
+.controls {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 10px;
+  gap: 10px;
+}
+
+.code-editor {
+  width: 100%;
+  font-family: monospace;
+  padding: 10px;
+  margin-bottom: 20px;
+}
+
+.result-panel {
+  background: #fff;
+  padding: 20px;
+  border-radius: 8px;
+}
+
+.result-panel pre {
+  background: #eee;
+  padding: 10px;
+  white-space: pre-wrap;
+}
+.result-panel {
+  margin-top: 2rem;
+}
+
+.suggestion-box {
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  padding: 1rem;
+  background-color: #f9f9f9;
+  margin-bottom: 1rem;
+}
