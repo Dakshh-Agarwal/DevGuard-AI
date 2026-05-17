@@ -244,19 +244,6 @@ Navigate to `http://localhost:5173`
 
 ---
 
-## 👥 Team
-
-| Name | Roll No |
-|---|---|
-| Mohammed Abdul Kareem | 23BD1A12A5 |
-| Mohammed Abdulla Hussain | 23BD1A12A6 |
-| Mohammed Khaleel Ullah | 23BD1A12A7 |
-| Patchilla Mohith | 23BD1A12B1 |
-| M. Manishwar | 24BD5A1204 |
-
-**Mentor:** Mrs. A Sri Tulasi, Assistant Professor, Department of CSE  
-**Institution:** Keshav Memorial Institute of Technology, Hyderabad
-
 ---
 
 ## 📄 License
