@@ -13,7 +13,7 @@ import Teams from './pages/Teams';
 import TeamRedirect from './components/TeamRedirect';
 import LeaderDashboard from './pages/LeaderDashboard';
 import MemberDashboard from './pages/MemberDashboard';
-import Ownership from './pages/ownership';
+
 import Home from './pages/Home';
 import { supabase } from './supabaseClient';
 
@@ -127,7 +127,7 @@ const App = () => {
         {/* 🏠 Public Landing & Info Routes */}
         <Route path="/" element={<Home />} />
         <Route path="/home" element={<Home />} />
-        <Route path="/ownership" element={<Ownership />} />
+
 
         {/* 🛑 Admin-only access */}
         <Route
