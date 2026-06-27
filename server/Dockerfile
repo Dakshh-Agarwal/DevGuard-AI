@@ -1,7 +1,7 @@
 FROM node:20-alpine
 
 # Install Python3 + pip for Pylint (used in Python code analysis)
-RUN apk add --no-cache python3 py3-pip && \
+RUN apk add --no-cache python3 py3-pip openjdk11-jre && \
     pip3 install --break-system-packages pylint
 
 WORKDIR /app

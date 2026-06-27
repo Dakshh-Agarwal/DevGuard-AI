@@ -63,7 +63,7 @@ const GithubCallback = () => {
     // Send code to backend to exchange for access token
     const apiUrl = import.meta.env.VITE_BACKEND_URL 
       ? `${import.meta.env.VITE_BACKEND_URL}/api/github/callback`
-      : 'http://localhost:5000/api/github/callback';
+      : `${import.meta.env.VITE_BACKEND_URL}/api/github/callback`;
       
     fetch(apiUrl, {
       method: 'POST',
@@ -277,7 +277,7 @@ const GithubCallback = () => {
                 <button
                   onClick={async () => {
                     try {
-                      const response = await fetch('http://localhost:5000/api/teams/leave', {
+                      const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/teams/leave`, {
                         method: 'POST',
                         headers: {
                           'Content-Type': 'application/json',

@@ -29,8 +29,6 @@ services:
   prometheus:
     image: prom/prometheus:v2.53.0
     container_name: devguard-prometheus
-    ports:
-      - "9090:9090"
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
@@ -49,8 +47,6 @@ services:
   loki:
     image: grafana/loki:2.9.0
     container_name: devguard-loki
-    ports:
-      - "3100:3100"
     volumes:
       - ./monitoring/loki-config.yml:/etc/loki/local-config.yaml:ro
       - loki-data:/loki
