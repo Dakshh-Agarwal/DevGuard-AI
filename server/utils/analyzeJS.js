@@ -1,4 +1,5 @@
 // utils/analyzeJS.js
+const logger = require("./logger");
 
 /**
  * Simple JS static analyzer
@@ -6,6 +7,7 @@
  * @returns {Array} suggestions [{ line, message }]
  */
 async function analyzeJavaScript(code) {
+  const analysisStart = process.hrtime.bigint();
   const suggestions = [];
   const lines = code.split("\n");
 
@@ -38,6 +40,15 @@ async function analyzeJavaScript(code) {
         source: "static"
       });
     }
+  });
+
+  const analysisSec = Number(process.hrtime.bigint() - analysisStart) / 1e9;
+
+  logger.info("JavaScript static analysis completed", {
+    duration_sec: analysisSec.toFixed(3),
+    suggestionsCount: suggestions.length,
+    linesAnalyzed: lines.length,
+    context: 'analyze.javascript',
   });
 
   return suggestions;

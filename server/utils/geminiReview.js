@@ -1,5 +1,12 @@
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 require("dotenv").config();
+const logger = require("./logger");
+const {
+  geminiCallsTotal,
+  geminiDuration,
+  geminiRetriesTotal,
+  geminiJsonParseErrors,
+} = require("./metrics");
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
@@ -9,14 +16,21 @@ const CRITICAL_TYPES = ["syntax", "logical", "semantic"];
 /* -----------------------------------------------
    Utility: Retry with exponential backoff
 ----------------------------------------------- */
-async function withRetries(fn, retries = 3, delay = 2000) {
+async function withRetries(fn, retries = 3, delay = 2000, modelName = 'unknown') {
   let lastError;
   for (let i = 0; i < retries; i++) {
     try {
       return await fn();
     } catch (err) {
       lastError = err;
-      console.warn(`⚠️ Attempt ${i + 1} failed: ${err.message}`);
+      geminiRetriesTotal.inc({ model: modelName });
+      logger.warn(`Gemini attempt ${i + 1} failed`, {
+        attempt: i + 1,
+        maxRetries: retries,
+        model: modelName,
+        error: err.message,
+        context: 'gemini.retry',
+      });
       if (i < retries - 1) {
         await new Promise((r) => setTimeout(r, delay));
         delay *= 2;
@@ -45,12 +59,18 @@ async function enforceJSON(model, prompt) {
         "";
     }
   } catch (e) {
-    console.error("Extraction error:", e.message);
+    logger.error("Gemini response extraction error", {
+      error: e.message,
+      context: 'gemini.extract',
+    });
   }
 
-  // Retry if response isn’t valid JSON
+  // Retry if response isn't valid JSON
   if (!raw.startsWith("{")) {
-    console.warn("⚠️ Gemini returned non-JSON, retrying...");
+    logger.warn("Gemini returned non-JSON, retrying with strict prompt", {
+      responsePreview: raw.substring(0, 100),
+      context: 'gemini.json',
+    });
     const retryPrompt = `
 STRICT MODE: Output ONLY valid JSON — no markdown, no commentary.
 
@@ -103,7 +123,9 @@ async function reviewWithGemini(
   projectContext = null
 ) {
   if (!process.env.GEMINI_API_KEY) {
-    console.error("❌ Missing GEMINI_API_KEY in .env file");
+    logger.error("Missing GEMINI_API_KEY in .env file", {
+      context: 'gemini.config',
+    });
     return fallbackResponse("Missing Gemini API key");
   }
 
@@ -124,7 +146,12 @@ async function reviewWithGemini(
   let prompt;
   
   if (isMultiFile && projectContext) {
-    console.log(`🔄 Using MULTI-FILE prompt for ${projectContext.currentFile} (${language})`);
+    logger.info(`Using MULTI-FILE prompt for ${projectContext.currentFile}`, {
+      language,
+      currentFile: projectContext.currentFile,
+      fileCount: projectContext.fileCount,
+      context: 'gemini.prompt',
+    });
     // Multi-file project analysis prompt
     prompt = `
 ${rejectionNotes}
@@ -166,7 +193,11 @@ ${code.substring(0, 2000)}
 \`\`\`
 `;
   } else {
-    console.log(`🔄 Using SINGLE-FILE prompt for ${language}`);
+    logger.info(`Using SINGLE-FILE prompt for ${language}`, {
+      language,
+      codeLength: code.length,
+      context: 'gemini.prompt',
+    });
     // Single file analysis prompt  
     prompt = `
 ${rejectionNotes}
@@ -199,20 +230,46 @@ ${code.substring(0, 2000)}
 
     // Try multiple Gemini models
     for (const modelName of models) {
-      console.log(`🔄 Trying Gemini model: ${modelName}`);
+      logger.info(`Trying Gemini model: ${modelName}`, {
+        model: modelName,
+        context: 'gemini.model',
+      });
+
+      const callStart = process.hrtime.bigint();
       const model = genAI.getGenerativeModel({ model: modelName });
 
       try {
-        result = await withRetries(() => enforceJSON(model, prompt));
+        result = await withRetries(() => enforceJSON(model, prompt), 3, 2000, modelName);
         chosenModel = modelName;
+
+        const callSec = Number(process.hrtime.bigint() - callStart) / 1e9;
+        geminiDuration.observe({ model: modelName }, callSec);
+        geminiCallsTotal.inc({ model: modelName, status: 'success' });
+
+        logger.info(`Gemini succeeded with ${modelName}`, {
+          model: modelName,
+          duration_sec: callSec.toFixed(3),
+          context: 'gemini.success',
+        });
         break;
       } catch (err) {
-        console.warn(`⚠️ ${modelName} failed: ${err.message}`);
+        const callSec = Number(process.hrtime.bigint() - callStart) / 1e9;
+        geminiDuration.observe({ model: modelName }, callSec);
+        geminiCallsTotal.inc({ model: modelName, status: 'failure' });
+
+        logger.warn(`Gemini model ${modelName} failed`, {
+          model: modelName,
+          error: err.message,
+          duration_sec: callSec.toFixed(3),
+          context: 'gemini.failure',
+        });
       }
     }
 
-    if (!result) throw new Error("All Gemini models failed");
-    console.log(`✅ Gemini succeeded with ${chosenModel}`);
+    if (!result) {
+      geminiCallsTotal.inc({ model: 'all', status: 'fallback' });
+      throw new Error("All Gemini models failed");
+    }
 
     const cleaned = result
       .replace(/^```json\s*/i, "")
@@ -224,7 +281,12 @@ ${code.substring(0, 2000)}
     try {
       parsed = JSON.parse(cleaned);
     } catch (e) {
-      console.error("Gemini JSON parse error:", e.message);
+      geminiJsonParseErrors.inc();
+      logger.error("Gemini JSON parse error", {
+        error: e.message,
+        responsePreview: cleaned.substring(0, 200),
+        context: 'gemini.parse',
+      });
       return fallbackResponse("AI returned unparsable response");
     }
 
@@ -236,9 +298,11 @@ ${code.substring(0, 2000)}
           (s.type || "").toLowerCase()
         )
       ) {
-        console.log(
-          `🛑 Skipping suggestion at line ${s.line} (previously rejected non-critical)`
-        );
+        logger.debug(`Skipping rejected suggestion at line ${s.line}`, {
+          line: s.line,
+          type: s.type,
+          context: 'gemini.filter',
+        });
         return false;
       }
       return true;
@@ -256,13 +320,25 @@ ${code.substring(0, 2000)}
       })),
     ];
 
-    console.log(`✅ ${orderedSuggestions.length} total suggestions ready`);
+    logger.info(`${orderedSuggestions.length} total suggestions ready`, {
+      totalSuggestions: orderedSuggestions.length,
+      staticCount: staticSuggestions.length,
+      geminiCount: filteredSuggestions.length,
+      model: chosenModel,
+      context: 'gemini.complete',
+    });
+
     return {
       rawReview: parsed.review || "No detailed summary available.",
       suggestions: orderedSuggestions,
     };
   } catch (err) {
-    console.error("💥 Gemini review failed:", err.message);
+    logger.error("Gemini review failed", {
+      error: err.message,
+      stack: err.stack,
+      language,
+      context: 'gemini.error',
+    });
     return fallbackResponse(`Error: ${err.message}`);
   }
 }
@@ -271,7 +347,10 @@ ${code.substring(0, 2000)}
    Fallback Response (when Gemini fails)
 ----------------------------------------------- */
 function fallbackResponse(errorMsg) {
-  console.warn("⚠️ Using fallback response due to error:", errorMsg);
+  logger.warn("Using fallback response", {
+    reason: errorMsg,
+    context: 'gemini.fallback',
+  });
   return {
     rawReview: `AI Review unavailable (${errorMsg}).`,
     suggestions: [
@@ -295,7 +374,10 @@ function fallbackResponse(errorMsg) {
    Multi-File Project Analysis
 ----------------------------------------------- */
 async function reviewMultiFileProject(files) {
-  console.log(`🔄 Starting multi-file project analysis for ${files.length} files`);
+  logger.info(`Starting multi-file project analysis`, {
+    fileCount: files.length,
+    context: 'gemini.multiFile',
+  });
   
   // Build project context
   const languages = [...new Set(files.map(f => f.language))];
@@ -309,7 +391,13 @@ async function reviewMultiFileProject(files) {
   
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
-    console.log(`🔍 Analyzing file ${i + 1}/${files.length}: ${file.filename}`);
+    logger.info(`Analyzing file ${i + 1}/${files.length}: ${file.filename}`, {
+      filename: file.filename,
+      language: file.language,
+      fileIndex: i + 1,
+      totalFiles: files.length,
+      context: 'gemini.multiFile',
+    });
     
     // Create enhanced context for this file
     const fileContext = {
@@ -347,10 +435,18 @@ async function reviewMultiFileProject(files) {
         analysis: analysis
       });
 
-      console.log(`✅ Completed analysis for ${file.filename}: ${analysis.suggestions?.length || 0} suggestions`);
-      console.log(`✅ Gemini review available: ${geminiResult.rawReview ? 'YES' : 'NO'}`);
+      logger.info(`Completed analysis for ${file.filename}`, {
+        filename: file.filename,
+        suggestionsCount: analysis.suggestions?.length || 0,
+        hasGeminiReview: !!geminiResult.rawReview,
+        context: 'gemini.multiFile',
+      });
     } catch (error) {
-      console.error(`❌ Failed to analyze ${file.filename}:`, error.message);
+      logger.error(`Failed to analyze ${file.filename}`, {
+        filename: file.filename,
+        error: error.message,
+        context: 'gemini.multiFile',
+      });
       results.push({
         file: file.filename,
         code: file.code,

@@ -63,7 +63,7 @@ const Login = () => {
           <div className="auth-header">
             <div className="auth-logo">
               
-              <h1 className="logo-text">LOGIC LENS</h1>
+              <h1 className="logo-text">DEVGUARD</h1>
             </div>
             <div className="auth-title">
               <h2>Welcome Back!</h2>

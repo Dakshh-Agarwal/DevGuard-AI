@@ -1,0 +1,21 @@
+# Prometheus Configuration for DevGuard-AI
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'devguard-backend'
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+    basic_auth:
+      username: admin
+      password: devguard-metrics
+    static_configs:
+      - targets: ['devguard-backend:5000']
+        labels:
+          service: 'devguard-backend'
+          environment: 'production'
+
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

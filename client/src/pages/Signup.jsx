@@ -67,12 +67,8 @@ const Signup = () => {
       const { data, error } = await supabase.auth.signUp({ email, password });
       if (error) setErrorMsg(error.message);
       else {
-        if (data.user && data.user.email_confirmed_at) {
-          navigate('/editor');
-        } else {
-          setSuccessMsg('Signup successful! Please check your email to confirm, then login.');
-          setTimeout(() => navigate('/login'), 3000);
-        }
+        setSuccessMsg('Signup successful! Redirecting...');
+        setTimeout(() => navigate('/dashboard'), 1500);
       }
     } catch (err) {
       console.error('Signup error:', err);
@@ -97,7 +93,7 @@ const Signup = () => {
         <div className="auth-card slide-up">
           <div className="auth-header">
             <div className="auth-logo">
-              <h1 className="logo-text">LOGIC LENS</h1>
+              <h1 className="logo-text">DEVGUARD</h1>
             </div>
             <div className="auth-title">
               <h2>Create Your Account</h2>

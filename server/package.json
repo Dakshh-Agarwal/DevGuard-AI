@@ -24,6 +24,9 @@
     "multer": "^2.0.2",
     "node-tree-sitter": "^0.0.1",
     "tree-sitter-c": "^0.24.1",
-    "tree-sitter-cpp": "^0.23.4"
+    "tree-sitter-cpp": "^0.23.4",
+    "prom-client": "^15.1.0",
+    "winston": "^3.17.0",
+    "winston-loki": "^6.1.3"
   }
 }

@@ -1,10 +1,17 @@
 
 
+
 // server/routes/feedback.js
 const express = require('express');
 const router = express.Router();
 const { supabase } = require('../utils/supabaseClient');
 const { verifyUserToken } = require('../utils/auth');
+const logger = require('../utils/logger');
+const {
+  feedbackDecisionsTotal,
+  supabaseQueryDuration,
+  supabaseErrorsTotal,
+} = require('../utils/metrics');
 
 /* ------------------------------------------------------------------
    POST /api/feedback  → Store user accept/reject feedback
@@ -37,14 +44,23 @@ router.post('/', verifyUserToken, async (req, res) => {
     /* --------------------------------------------------------------
        Get user's team_id 
     -------------------------------------------------------------- */
+    const teamQueryStart = process.hrtime.bigint();
     const { data: teamData, error: teamError } = await supabase
       .from('team_members')
       .select('team_id')
       .eq('user_id', req.user.id)
       .single();
 
+    const teamQuerySec = Number(process.hrtime.bigint() - teamQueryStart) / 1e9;
+    supabaseQueryDuration.observe({ table: 'team_members', operation: 'select' }, teamQuerySec);
+
     if (teamError && teamError.code !== 'PGRST116') {
-      console.error('Error fetching user team:', teamError.message);
+      supabaseErrorsTotal.inc({ table: 'team_members', operation: 'select' });
+      logger.error('Error fetching user team', {
+        error: teamError.message,
+        user_id: req.user.id,
+        context: 'feedback.post',
+      });
       return res.status(500).json({ error: 'Failed to get user team' });
     }
 
@@ -53,6 +69,7 @@ router.post('/', verifyUserToken, async (req, res) => {
     /* --------------------------------------------------------------
        Insert feedback record into Supabase
     -------------------------------------------------------------- */
+    const insertStart = process.hrtime.bigint();
     const { data, error } = await supabase
   .from('feedback')
   .insert([
@@ -74,15 +91,43 @@ router.post('/', verifyUserToken, async (req, res) => {
   .select()
   .single();
 
+    const insertSec = Number(process.hrtime.bigint() - insertStart) / 1e9;
+    supabaseQueryDuration.observe({ table: 'feedback', operation: 'insert' }, insertSec);
 
     if (error) {
-      console.error('Supabase insert error:', error.message);
+      supabaseErrorsTotal.inc({ table: 'feedback', operation: 'insert' });
+      logger.error('Supabase feedback insert error', {
+        error: error.message,
+        user_id: req.user.id,
+        language,
+        action,
+        context: 'feedback.post',
+      });
       return res.status(500).json({ error: 'Failed to store feedback' });
     }
 
+    // Record feedback decision metric
+    feedbackDecisionsTotal.inc({ decision: action, suggestion_type: suggestionType });
+
+    logger.info('Feedback stored successfully', {
+      user_id: req.user.id,
+      decision: action,
+      suggestion_type: suggestionType,
+      language,
+      source: source || 'static',
+      team_id,
+      feedback_id: data?.id,
+      context: 'feedback.post',
+    });
+
     res.json({ message: '✅ Feedback stored successfully', feedback: data });
   } catch (err) {
-    console.error('Unexpected server error:', err);
+    logger.error('Unexpected feedback error', {
+      error: err.message,
+      stack: err.stack,
+      user_id: req.user?.id,
+      context: 'feedback.post',
+    });
     res.status(500).json({ error: 'Server error while storing feedback' });
   }
 });
@@ -109,6 +154,7 @@ router.get('/all', async (req, res) => {
   try {
     const { team_id, user_id } = req.query;
 
+    const queryStart = process.hrtime.bigint();
     let query = supabase.from('feedback').select('*');
 
     if (team_id) query = query.eq('team_id', team_id);
@@ -116,14 +162,31 @@ router.get('/all', async (req, res) => {
 
     const { data, error } = await query;
 
+    const querySec = Number(process.hrtime.bigint() - queryStart) / 1e9;
+    supabaseQueryDuration.observe({ table: 'feedback', operation: 'select' }, querySec);
+
     if (error) {
-      console.error('Error fetching feedback:', error.message);
+      supabaseErrorsTotal.inc({ table: 'feedback', operation: 'select' });
+      logger.error('Error fetching feedback', {
+        error: error.message,
+        context: 'feedback.all',
+      });
       return res.status(500).json({ error: 'Failed to fetch feedback' });
     }
 
+    logger.info('Feedback fetched', {
+      count: data?.length || 0,
+      team_id: team_id || 'all',
+      context: 'feedback.all',
+    });
+
     res.json(data);
   } catch (err) {
-    console.error('Unexpected fetch error:', err);
+    logger.error('Unexpected feedback fetch error', {
+      error: err.message,
+      stack: err.stack,
+      context: 'feedback.all',
+    });
     res.status(500).json({ error: 'Server error while fetching feedback' });
   }
 });
@@ -149,6 +212,7 @@ router.get('/my/:teamId', verifyUserToken, async (req, res) => {
     }
 
     // Get user's feedback for this team
+    const queryStart = process.hrtime.bigint();
     const { data: feedback, error } = await supabase
       .from('feedback')
       .select('*')
@@ -157,14 +221,28 @@ router.get('/my/:teamId', verifyUserToken, async (req, res) => {
       .order('created_at', { ascending: false })
       .limit(20); // Limit to recent 20 items
 
+    const querySec = Number(process.hrtime.bigint() - queryStart) / 1e9;
+    supabaseQueryDuration.observe({ table: 'feedback', operation: 'select' }, querySec);
+
     if (error) {
-      console.error('Error fetching user feedback:', error.message);
+      supabaseErrorsTotal.inc({ table: 'feedback', operation: 'select' });
+      logger.error('Error fetching user feedback', {
+        error: error.message,
+        user_id,
+        team_id: teamId,
+        context: 'feedback.my',
+      });
       return res.status(500).json({ error: 'Failed to fetch feedback' });
     }
 
     res.json(feedback || []);
   } catch (err) {
-    console.error('Unexpected fetch error:', err);
+    logger.error('Unexpected feedback fetch error', {
+      error: err.message,
+      stack: err.stack,
+      user_id,
+      context: 'feedback.my',
+    });
     res.status(500).json({ error: 'Server error while fetching feedback' });
   }
 });
@@ -215,6 +293,7 @@ router.post('/submit', verifyUserToken, async (req, res) => {
     }
 
     // Insert feedback
+    const insertStart = process.hrtime.bigint();
     const { data, error } = await supabase
       .from('peer_feedback')
       .insert([{
@@ -230,14 +309,38 @@ router.post('/submit', verifyUserToken, async (req, res) => {
       .select()
       .single();
 
+    const insertSec = Number(process.hrtime.bigint() - insertStart) / 1e9;
+    supabaseQueryDuration.observe({ table: 'peer_feedback', operation: 'insert' }, insertSec);
+
     if (error) {
-      console.error('Error submitting feedback:', error.message);
+      supabaseErrorsTotal.inc({ table: 'peer_feedback', operation: 'insert' });
+      logger.error('Error submitting peer feedback', {
+        error: error.message,
+        reviewer_id,
+        reviewee_id,
+        team_id,
+        context: 'feedback.submit',
+      });
       return res.status(500).json({ error: 'Failed to submit feedback' });
     }
 
+    logger.info('Peer feedback submitted', {
+      reviewer_id,
+      reviewee_id,
+      team_id,
+      rating: parseInt(rating),
+      category: category || 'general',
+      context: 'feedback.submit',
+    });
+
     res.json({ message: 'Feedback submitted successfully', feedback: data });
   } catch (err) {
-    console.error('Unexpected error:', err);
+    logger.error('Unexpected peer feedback error', {
+      error: err.message,
+      stack: err.stack,
+      reviewer_id,
+      context: 'feedback.submit',
+    });
     res.status(500).json({ error: 'Server error while submitting feedback' });
   }
 });
@@ -263,6 +366,7 @@ router.get('/received/:teamId', verifyUserToken, async (req, res) => {
     }
 
     // Get feedback received by this user in this team with reviewer data
+    const queryStart = process.hrtime.bigint();
     const { data: receivedFeedback, error } = await supabase
       .from('peer_feedback')
       .select(`
@@ -273,8 +377,17 @@ router.get('/received/:teamId', verifyUserToken, async (req, res) => {
       .eq('reviewee_id', user_id)
       .order('created_at', { ascending: false });
 
+    const querySec = Number(process.hrtime.bigint() - queryStart) / 1e9;
+    supabaseQueryDuration.observe({ table: 'peer_feedback', operation: 'select' }, querySec);
+
     if (error) {
-      console.error('Error fetching received feedback:', error.message);
+      supabaseErrorsTotal.inc({ table: 'peer_feedback', operation: 'select' });
+      logger.error('Error fetching received feedback', {
+        error: error.message,
+        user_id,
+        team_id: teamId,
+        context: 'feedback.received',
+      });
       return res.status(500).json({ error: 'Failed to fetch received feedback' });
     }
 
@@ -293,7 +406,12 @@ router.get('/received/:teamId', verifyUserToken, async (req, res) => {
 
     res.json(processedFeedback);
   } catch (err) {
-    console.error('Unexpected fetch error:', err);
+    logger.error('Unexpected received feedback error', {
+      error: err.message,
+      stack: err.stack,
+      user_id,
+      context: 'feedback.received',
+    });
     res.status(500).json({ error: 'Server error while fetching received feedback' });
   }
 });

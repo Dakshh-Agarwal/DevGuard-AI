@@ -1,6 +1,9 @@
+// server/routes/github.js
 const express = require('express');
 const axios = require('axios');
 const router = express.Router();
+const logger = require('../utils/logger');
+const { oauthAttemptsTotal } = require('../utils/metrics');
 
 // In-memory cache to avoid re-exchanging the same one-time OAuth code.
 // Codes are single-use; duplicate POSTs (from double-mounts or retries) cause GitHub to reply with bad_verification_code.
@@ -20,29 +23,35 @@ const CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
 // POST /api/github/callback
 // Expects { code } in bod
 router.post('/callback', async (req, res) => {
-  console.log('Received POST /api/github/callback');
-  console.log('Request headers:', req.headers);
-  console.log('Request body:', req.body);
-  console.log('Using GitHub CLIENT_ID:', CLIENT_ID);
-  console.log('Using GitHub CLIENT_SECRET:', CLIENT_SECRET ? CLIENT_SECRET.replace(/./g, '*').slice(-4).padStart(CLIENT_SECRET.length, '*') : '<not set>');
+  logger.info('GitHub OAuth callback received', {
+    context: 'github.oauth',
+  });
+
   // Accept code from POST body or query param for robustness
   const code = req.body?.code || req.query?.code;
   if (!code) {
-    console.warn('Missing OAuth code in request (body and query empty)');
+    logger.warn('Missing OAuth code in request', {
+      context: 'github.oauth',
+    });
+    oauthAttemptsTotal.inc({ status: 'failure' });
     return res.status(400).json({ error: 'Missing code. Provide { code } in JSON body or ?code= in query string' });
   }
 
   // Server-side guard: if we already exchanged this code, return early to avoid hitting GitHub with duplicate requests
   if (exchangedCodes.has(code)) {
-    console.warn('OAuth code already exchanged (server-side guard) for code:', code);
+    logger.warn('OAuth code already exchanged (duplicate request)', {
+      context: 'github.oauth',
+    });
+    oauthAttemptsTotal.inc({ status: 'duplicate' });
     return res.status(400).json({ error: 'This OAuth code has already been exchanged. Generate a fresh authorization.' });
   }
 
   // Mark code as being processed immediately to prevent race conditions
   exchangedCodes.add(code);
-  console.log('Marked code as processing:', code);
 
   try {
+    const exchangeStart = process.hrtime.bigint();
+
     // Exchange code for access token
     const response = await axios.post(
       'https://github.com/login/oauth/access_token',
@@ -56,9 +65,16 @@ router.post('/callback', async (req, res) => {
       }
     );
 
+    const exchangeSec = Number(process.hrtime.bigint() - exchangeStart) / 1e9;
+
     const { access_token, token_type, scope, error } = response.data;
     if (error || !access_token) {
-      console.error('GitHub token error:', response.data);
+      logger.error('GitHub token exchange failed', {
+        error: error || 'No access token received',
+        duration_sec: exchangeSec.toFixed(3),
+        context: 'github.oauth',
+      });
+      oauthAttemptsTotal.inc({ status: 'failure' });
       return res.status(400).json({ error: error || 'No access token received', details: response.data });
     }
 
@@ -70,9 +86,21 @@ router.post('/callback', async (req, res) => {
       headers: { Authorization: `token ${access_token}` }
     });
 
+    oauthAttemptsTotal.inc({ status: 'success' });
+    logger.info('GitHub OAuth login successful', {
+      github_user: userRes.data?.login,
+      duration_sec: exchangeSec.toFixed(3),
+      context: 'github.oauth',
+    });
+
     res.json({ access_token, token_type, scope, github_user: userRes.data });
   } catch (err) {
-    console.error('GitHub OAuth error:', err.message, err.response?.data);
+    oauthAttemptsTotal.inc({ status: 'failure' });
+    logger.error('GitHub OAuth error', {
+      error: err.message,
+      response_data: err.response?.data,
+      context: 'github.oauth',
+    });
     res.status(500).json({ error: 'GitHub OAuth failed', details: err.response?.data });
   }
 });

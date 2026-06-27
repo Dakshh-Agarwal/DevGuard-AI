@@ -1,0 +1,13 @@
+# Grafana Dashboard Provisioning Config
+apiVersion: 1
+
+providers:
+  - name: 'DevGuard Dashboards'
+    orgId: 1
+    folder: 'DevGuard-AI'
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

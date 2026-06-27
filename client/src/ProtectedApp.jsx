@@ -95,7 +95,7 @@ const ProtectedApp = ({ children }) => {
           <div className="loading-content">
             <div className="loading-spinner"></div>
             <div className="loading-text">
-              <h3>Initializing Logic Lens</h3>
+              <h3>Initializing DevGuard</h3>
               <p>Preparing your AI-powered code analysis environment...</p>
             </div>
           </div>

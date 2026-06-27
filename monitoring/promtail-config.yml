@@ -1,0 +1,33 @@
+# Promtail Configuration for DevGuard-AI
+# Collects Docker container logs and ships to Loki as backup
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  # Scrape Docker container logs
+  - job_name: docker
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: docker
+          __path__: /var/lib/docker/containers/*/*-json.log
+
+    pipeline_stages:
+      - docker: {}
+      - labels:
+          container_name:
+      - match:
+          selector: '{job="docker"}'
+          stages:
+            - regex:
+                expression: '.*container_name=(?P<container>[a-zA-Z0-9_-]+).*'
+            - labels:
+                container:

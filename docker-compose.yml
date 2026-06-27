@@ -1,0 +1,108 @@
+version: "3.8"
+
+services:
+  # ============================================================
+  # DevGuard Backend
+  # ============================================================
+  devguard-backend:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: devguard-backend
+    ports:
+      - "5000:5000"
+    env_file:
+      - ./server/.env
+    environment:
+      - LOKI_URL=http://loki:3100
+      - METRICS_USER=admin
+      - METRICS_PASS=devguard-metrics
+    networks:
+      - devguard-network
+    restart: unless-stopped
+    depends_on:
+      - loki
+
+  # ============================================================
+  # Prometheus — Metrics collection
+  # ============================================================
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: devguard-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    networks:
+      - devguard-network
+    restart: unless-stopped
+
+  # ============================================================
+  # Loki — Log aggregation
+  # ============================================================
+  loki:
+    image: grafana/loki:2.9.0
+    container_name: devguard-loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./monitoring/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - devguard-network
+    restart: unless-stopped
+
+  # ============================================================
+  # Promtail — Docker log shipping to Loki (backup)
+  # ============================================================
+  promtail:
+    image: grafana/promtail:2.9.0
+    container_name: devguard-promtail
+    volumes:
+      - ./monitoring/promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - devguard-network
+    restart: unless-stopped
+    depends_on:
+      - loki
+
+  # ============================================================
+  # Grafana — Visualization & Dashboards
+  # ============================================================
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: devguard-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    networks:
+      - devguard-network
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+      - loki
+
+networks:
+  devguard-network:
+    driver: bridge
+
+volumes:
+  prometheus-data:
+  loki-data:
+  grafana-data:

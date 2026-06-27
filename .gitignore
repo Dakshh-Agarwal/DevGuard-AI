@@ -1,5 +1,42 @@
-# Ignore node_modules folder
+# Dependencies
 node_modules/
+package-lock.json
 
-# Ignore environment variables
+# Environment variables (NEVER commit)
 .env
+.env.local
+.env.production
+
+# Build output
+dist/
+build/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Temp files (multer uploads, analysis temp)
+server/temp/
+temp/
+*.tmp
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+
+# Docker volumes (local)
+grafana-data/
+prometheus-data/
+loki-data/

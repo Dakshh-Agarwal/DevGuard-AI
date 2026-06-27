@@ -1,11 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const { supabase } = require('../utils/supabaseClient');
+const logger = require('../utils/logger');
+const { supabaseQueryDuration, supabaseErrorsTotal } = require('../utils/metrics');
 
 // 🧠 Debug endpoint to test user fetching
 router.get('/debug-users', async (req, res) => {
   try {
-    console.log('🔍 Testing user fetching...');
+    logger.info('Debug: testing user fetching', { context: 'stats.debug' });
     
     const { data: feedbacks, error: feedbackError } = await supabase
       .from('feedback')
@@ -17,7 +19,6 @@ router.get('/debug-users', async (req, res) => {
     }
 
     const userIds = [...new Set(feedbacks.map(f => f.user_id).filter(Boolean))];
-    console.log('Found user IDs:', userIds);
 
     if (userIds.length === 0) {
       return res.json({ message: 'No user IDs found in feedback table' });
@@ -49,42 +50,54 @@ router.get('/debug-users', async (req, res) => {
 // ✅ Main Admin Dashboard Stats API
 router.get('/', async (req, res) => {
   try {
-console.log('🔍 Starting admin stats fetch...');
+    logger.info('Starting admin stats fetch', { context: 'stats.dashboard' });
 
-// 🚀 Fetch latest feedbacks directly from Supabase
-const { data, error } = await supabase
-  .from('feedback')
-  .select('*')
-  .order('created_at', { ascending: false })
-  .limit(1000); // removed .neq('id', null)
+    const queryStart = process.hrtime.bigint();
 
-if (error) throw error;
+    // 🚀 Fetch latest feedbacks directly from Supabase
+    const { data, error } = await supabase
+      .from('feedback')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(1000);
 
-const feedbacks = data || [];
-console.log(`📊 Found ${feedbacks.length} feedback entries (fresh fetch)`);
+    const querySec = Number(process.hrtime.bigint() - queryStart) / 1e9;
+    supabaseQueryDuration.observe({ table: 'feedback', operation: 'select' }, querySec);
 
-// Disable all caching
-res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-res.setHeader('Pragma', 'no-cache');
-res.setHeader('Expires', '0');
-res.setHeader('Surrogate-Control', 'no-store');
+    if (error) {
+      supabaseErrorsTotal.inc({ table: 'feedback', operation: 'select' });
+      throw error;
+    }
+
+    const feedbacks = data || [];
+    logger.info(`Found ${feedbacks.length} feedback entries`, {
+      count: feedbacks.length,
+      duration_sec: querySec.toFixed(3),
+      context: 'stats.dashboard',
+    });
+
+    // Disable all caching
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('Surrogate-Control', 'no-store');
 
     // 🧮 Analyze user IDs
     const allUserIds = feedbacks.map(f => f.user_id);
     const nullUserIds = allUserIds.filter(id => !id);
     const validUserIds = [...new Set(allUserIds.filter(Boolean))];
     
-    console.log('📊 User ID analysis:');
-    console.log(`- Total feedback entries: ${feedbacks.length}`);
-    console.log(`- Entries with null user_id: ${nullUserIds.length}`);
-    console.log(`- Unique valid user IDs: ${validUserIds.length}`);
+    logger.info('User ID analysis', {
+      totalEntries: feedbacks.length,
+      nullUserIds: nullUserIds.length,
+      uniqueValidIds: validUserIds.length,
+      context: 'stats.dashboard',
+    });
 
     // 🧠 Fetch user profiles via Supabase Admin API
     const userProfiles = {};
     
     if (validUserIds.length > 0) {
-      console.log('🔍 Fetching user profiles for:', validUserIds);
-      
       for (const userId of validUserIds) {
         try {
           const { data: userData, error: userError } = await supabase.auth.admin.getUserById(userId);
@@ -104,10 +117,12 @@ res.setHeader('Surrogate-Control', 'no-store');
               username: user.user_metadata?.username || user.user_metadata?.user_name,
               display_name: displayName
             };
-            
-            console.log(`✅ Fetched user ${userId}:`, { email: user.email, display_name: displayName });
           } else {
-            console.log(`❌ Failed to fetch user ${userId}:`, userError?.message);
+            logger.warn(`Failed to fetch user profile`, {
+              user_id: userId,
+              error: userError?.message,
+              context: 'stats.dashboard',
+            });
             userProfiles[userId] = {
               email: 'User not found',
               display_name: `User-${userId.substring(0, 8)}`,
@@ -116,7 +131,11 @@ res.setHeader('Surrogate-Control', 'no-store');
             };
           }
         } catch (userErr) {
-          console.error(`💥 Error fetching user ${userId}:`, userErr.message);
+          logger.error(`Error fetching user profile`, {
+            user_id: userId,
+            error: userErr.message,
+            context: 'stats.dashboard',
+          });
           userProfiles[userId] = {
             email: 'Fetch error',
             display_name: `User-${userId.substring(0, 8)}`,
@@ -125,8 +144,6 @@ res.setHeader('Surrogate-Control', 'no-store');
           };
         }
       }
-
-      console.log(`✅ Final user profiles created: ${Object.keys(userProfiles).length}`);
     }
 
     // 🧩 Normalize and attach user info
@@ -175,7 +192,11 @@ res.setHeader('Surrogate-Control', 'no-store');
 
     res.json(stats);
   } catch (err) {
-    console.error('💥 Error in /api/admin/stats:', err.message);
+    logger.error('Error in admin stats', {
+      error: err.message,
+      stack: err.stack,
+      context: 'stats.dashboard',
+    });
     res.status(500).json({ error: err.message || 'Unknown error occurred' });
   }
 });
@@ -184,7 +205,7 @@ res.setHeader('Surrogate-Control', 'no-store');
 router.get('/force-refresh', async (req, res) => {
   try {
     const timestamp = Date.now();
-    console.log('🔁 Force-refreshing stats at', timestamp);
+    logger.info('Force-refreshing stats', { timestamp, context: 'stats.refresh' });
     const { data, error } = await supabase
       .from('feedback')
       .select('*')

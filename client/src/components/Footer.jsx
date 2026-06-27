@@ -18,7 +18,7 @@ const Footer = () => {
                   <path d="M2 12L12 17L22 12"/>
                 </svg>
               </div>
-              <h3>Logic Lens</h3>
+              <h3>DevGuard</h3>
             </div>
             <p className="footer-description">
               AI-powered code review platform that helps developers write better code 
@@ -91,7 +91,7 @@ const Footer = () => {
         {/* Bottom Bar */}
         <div className="footer-bottom">
           <div className="copyright">
-            <p>&copy; {currentYear} Logic Lens. All rights reserved.</p>
+            <p>&copy; {currentYear} DevGuard. All rights reserved.</p>
           </div>
           <div className="footer-meta">
             <span className="status-indicator">

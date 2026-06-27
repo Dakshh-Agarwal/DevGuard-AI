@@ -3,7 +3,8 @@ const express = require('express');
 const router = express.Router();
 const { supabase } = require('../utils/supabaseClient');
 const { verifyUserToken } = require('../utils/auth');
-console.log("verifyUserToken =", verifyUserToken);
+const logger = require('../utils/logger');
+const { supabaseQueryDuration, supabaseErrorsTotal } = require('../utils/metrics');
 
 // Create a new team (Leader)
 router.post('/', verifyUserToken, async (req, res) => {
@@ -14,13 +15,20 @@ router.post('/', verifyUserToken, async (req, res) => {
 
   try {
     // Create the team
+    const insertStart = process.hrtime.bigint();
     const { data: team, error: teamError } = await supabase
       .from('teams')
       .insert([{ team_name, team_lead_id: user_id, owner_id: user_id }])
       .select()
       .single();
 
-    if (teamError) throw teamError;
+    const insertSec = Number(process.hrtime.bigint() - insertStart) / 1e9;
+    supabaseQueryDuration.observe({ table: 'teams', operation: 'insert' }, insertSec);
+
+    if (teamError) {
+      supabaseErrorsTotal.inc({ table: 'teams', operation: 'insert' });
+      throw teamError;
+    }
 
     // Add the creator as the team owner in team_members
     const { error: memberError } = await supabase
@@ -32,12 +40,28 @@ router.post('/', verifyUserToken, async (req, res) => {
         joined_at: new Date().toISOString()
       }]);
 
-    if (memberError) throw memberError;
+    if (memberError) {
+      supabaseErrorsTotal.inc({ table: 'team_members', operation: 'insert' });
+      throw memberError;
+    }
 
     const join_link = `${process.env.VITE_FRONTEND_URL}/join/${team.team_id}`;
+
+    logger.info('Team created', {
+      team_id: team.team_id,
+      team_name,
+      user_id,
+      context: 'teams.create',
+    });
+
     res.json({ team_id: team.team_id, join_link });
   } catch (error) {
-    console.error('Error creating team:', error);
+    logger.error('Error creating team', {
+      error: error.message,
+      user_id,
+      team_name,
+      context: 'teams.create',
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -72,11 +96,25 @@ router.get('/:teamId/join', verifyUserToken, async (req, res) => {
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      supabaseErrorsTotal.inc({ table: 'team_members', operation: 'insert' });
+      throw error;
+    }
+
+    logger.info('User joined team', {
+      team_id: teamId,
+      user_id,
+      context: 'teams.join',
+    });
 
     res.json({ message: 'Joined team successfully', team_member: data });
   } catch (error) {
-    console.error('Error joining team:', error);
+    logger.error('Error joining team', {
+      error: error.message,
+      team_id: teamId,
+      user_id,
+      context: 'teams.join',
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -96,12 +134,25 @@ router.get('/:teamId/dashboard', verifyUserToken, async (req, res) => {
     return res.status(403).json({ error: 'Not authorized' });
   }
 
+  const queryStart = process.hrtime.bigint();
   const { data: feedback, error } = await supabase
     .from('feedback')
     .select('*')
     .eq('team_id', teamId);
 
-  if (error) return res.status(500).json({ error: error.message });
+  const querySec = Number(process.hrtime.bigint() - queryStart) / 1e9;
+  supabaseQueryDuration.observe({ table: 'feedback', operation: 'select' }, querySec);
+
+  if (error) {
+    supabaseErrorsTotal.inc({ table: 'feedback', operation: 'select' });
+    return res.status(500).json({ error: error.message });
+  }
+
+  logger.info('Team dashboard fetched', {
+    team_id: teamId,
+    feedback_count: feedback?.length || 0,
+    context: 'teams.dashboard',
+  });
 
   res.json({ feedback });
 });
@@ -135,7 +186,10 @@ router.get('/:teamId/members', verifyUserToken, async (req, res) => {
       `)
       .eq('team_id', teamId);
 
-    if (membersError) throw membersError;
+    if (membersError) {
+      supabaseErrorsTotal.inc({ table: 'team_members', operation: 'select' });
+      throw membersError;
+    }
 
     // Map members to include profile information
     const membersWithProfiles = members.map(member => ({
@@ -146,8 +200,6 @@ router.get('/:teamId/members', verifyUserToken, async (req, res) => {
         username: `member_${member.user_id.substring(0, 8)}`
       }
     }));
-
-    console.log('Members with profiles:', membersWithProfiles);
 
     // Get feedback statistics for each member
     const membersWithStats = await Promise.all(
@@ -181,9 +233,19 @@ router.get('/:teamId/members', verifyUserToken, async (req, res) => {
       })
     );
 
+    logger.info('Team members fetched', {
+      team_id: teamId,
+      member_count: membersWithStats.length,
+      context: 'teams.members',
+    });
+
     res.json({ members: membersWithStats });
   } catch (error) {
-    console.error('Error fetching team members:', error);
+    logger.error('Error fetching team members', {
+      error: error.message,
+      team_id: teamId,
+      context: 'teams.members',
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -219,11 +281,26 @@ router.patch('/:teamId/members/:userId/role', verifyUserToken, async (req, res) 
       .eq('team_id', teamId)
       .eq('user_id', userId);
 
-    if (updateError) throw updateError;
+    if (updateError) {
+      supabaseErrorsTotal.inc({ table: 'team_members', operation: 'update' });
+      throw updateError;
+    }
+
+    logger.info('Member role updated', {
+      team_id: teamId,
+      target_user_id: userId,
+      new_role: role,
+      requester_id: requesterId,
+      context: 'teams.role',
+    });
 
     res.json({ message: 'Member role updated successfully' });
   } catch (error) {
-    console.error('Error updating member role:', error);
+    logger.error('Error updating member role', {
+      error: error.message,
+      team_id: teamId,
+      context: 'teams.role',
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -258,11 +335,25 @@ router.delete('/:teamId/members/:userId', verifyUserToken, async (req, res) => {
       .eq('team_id', teamId)
       .eq('user_id', userId);
 
-    if (removeError) throw removeError;
+    if (removeError) {
+      supabaseErrorsTotal.inc({ table: 'team_members', operation: 'delete' });
+      throw removeError;
+    }
+
+    logger.info('Team member removed', {
+      team_id: teamId,
+      removed_user_id: userId,
+      requester_id: requesterId,
+      context: 'teams.remove',
+    });
 
     res.json({ message: 'Member removed successfully' });
   } catch (error) {
-    console.error('Error removing member:', error);
+    logger.error('Error removing member', {
+      error: error.message,
+      team_id: teamId,
+      context: 'teams.remove',
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -322,6 +413,13 @@ router.get('/:teamId/analytics', verifyUserToken, async (req, res) => {
       new Date(f.created_at) > thirtyDaysAgo
     ).length || 0;
 
+    logger.info('Team analytics fetched', {
+      team_id: teamId,
+      totalFeedback,
+      memberCount,
+      context: 'teams.analytics',
+    });
+
     res.json({
       team,
       analytics: {
@@ -335,7 +433,11 @@ router.get('/:teamId/analytics', verifyUserToken, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching team analytics:', error);
+    logger.error('Error fetching team analytics', {
+      error: error.message,
+      team_id: teamId,
+      context: 'teams.analytics',
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -366,7 +468,10 @@ router.get('/:teamId/my-feedback', verifyUserToken, async (req, res) => {
       .eq('user_id', user_id)
       .order('created_at', { ascending: false });
 
-    if (feedbackError) throw feedbackError;
+    if (feedbackError) {
+      supabaseErrorsTotal.inc({ table: 'feedback', operation: 'select' });
+      throw feedbackError;
+    }
 
     // Calculate personal stats
     const totalFeedback = feedback?.length || 0;
@@ -398,7 +503,12 @@ router.get('/:teamId/my-feedback', verifyUserToken, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching member feedback:', error);
+    logger.error('Error fetching member feedback', {
+      error: error.message,
+      team_id: teamId,
+      user_id,
+      context: 'teams.myFeedback',
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -449,7 +559,11 @@ router.get('/:teamId/info', verifyUserToken, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching team info:', error);
+    logger.error('Error fetching team info', {
+      error: error.message,
+      team_id: teamId,
+      context: 'teams.info',
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -509,12 +623,21 @@ router.post('/fix-roles', verifyUserToken, async (req, res) => {
       }
     }
 
+    logger.info('Team roles fixed', {
+      fixedCount,
+      teamsProcessed: teams.length,
+      context: 'teams.fixRoles',
+    });
+
     res.json({ 
       message: `Fixed ${fixedCount} team role assignments`,
       teamsProcessed: teams.length 
     });
   } catch (error) {
-    console.error('Error fixing team roles:', error);
+    logger.error('Error fixing team roles', {
+      error: error.message,
+      context: 'teams.fixRoles',
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -552,11 +675,21 @@ router.post('/:teamId/leave', verifyUserToken, async (req, res) => {
       .eq('user_id', userId);
 
     if (removeError) {
-      console.error('Error removing user from team:', removeError);
+      supabaseErrorsTotal.inc({ table: 'team_members', operation: 'delete' });
+      logger.error('Error removing user from team', {
+        error: removeError.message,
+        team_id: teamId,
+        user_id: userId,
+        context: 'teams.leave',
+      });
       return res.status(500).json({ error: 'Failed to leave team' });
     }
 
-    console.log(`✅ User ${userId} successfully left team ${teamId}`);
+    logger.info('User left team', {
+      team_id: teamId,
+      user_id: userId,
+      context: 'teams.leave',
+    });
     
     res.json({ 
       message: 'Successfully left the team',
@@ -564,7 +697,12 @@ router.post('/:teamId/leave', verifyUserToken, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error leaving team:', error);
+    logger.error('Error leaving team', {
+      error: error.message,
+      team_id: teamId,
+      user_id: userId,
+      context: 'teams.leave',
+    });
     res.status(500).json({ error: error.message || 'Failed to leave team' });
   }
 });

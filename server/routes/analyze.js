@@ -11,6 +11,18 @@ const { reviewWithGemini, reviewMultiFileProject } = require("../utils/geminiRev
 const analyzeJavaScript = require("../utils/analyzeJS");
 const analyzeJava = require("../utils/analyzeJava");
 const analyzeCpp = require("../utils/analyzeCpp");
+const logger = require("../utils/logger");
+const {
+  reviewsSubmittedTotal,
+  reviewsCompletedTotal,
+  reviewDuration,
+  reviewIssuesTotal,
+  reviewQueueSize,
+  pylintDuration,
+  staticAnalysisErrors,
+  supabaseQueryDuration,
+  supabaseErrorsTotal,
+} = require("../utils/metrics");
 
 const { createClient } = require("@supabase/supabase-js");
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
@@ -24,13 +36,21 @@ const processQueue = async () => {
   
   isProcessingMultiFile = true;
   const { req, res, handler } = multiFileQueue.shift();
+  reviewQueueSize.set(multiFileQueue.length);
   
-  console.log(`🔄 Processing queued request (${multiFileQueue.length} remaining in queue)`);
+  logger.info('Processing queued multi-file request', {
+    queueRemaining: multiFileQueue.length,
+    context: 'analyze.queue',
+  });
   
   try {
     await handler(req, res);
   } catch (error) {
-    console.error('❌ Queue processing error:', error);
+    logger.error('Queue processing error', {
+      error: error.message,
+      stack: error.stack,
+      context: 'analyze.queue',
+    });
     if (!res.headersSent) {
       res.status(500).json({ error: 'Queue processing failed', details: error.message });
     }
@@ -50,6 +70,7 @@ const upload = multer({ dest: TEMP_DIR });
 
 // Helper: fetch past rejected suggestions
 async function getRejectionComments(code, language) {
+  const queryStart = process.hrtime.bigint();
   try {
     const { data, error } = await supabase
       .from("feedback")
@@ -58,11 +79,24 @@ async function getRejectionComments(code, language) {
       .eq("code", code)
       .eq("decision", "reject");
 
-    if (error) return [];
+    const durationSec = Number(process.hrtime.bigint() - queryStart) / 1e9;
+    supabaseQueryDuration.observe({ table: 'feedback', operation: 'select' }, durationSec);
+
+    if (error) {
+      supabaseErrorsTotal.inc({ table: 'feedback', operation: 'select' });
+      return [];
+    }
     return data.filter(d => d.comment?.trim())
                .map(d => `• Previously, "${d.suggestion}" was rejected because: "${d.comment}"`);
   } catch (err) {
-    console.error("Supabase fetch error:", err);
+    const durationSec = Number(process.hrtime.bigint() - queryStart) / 1e9;
+    supabaseQueryDuration.observe({ table: 'feedback', operation: 'select' }, durationSec);
+    supabaseErrorsTotal.inc({ table: 'feedback', operation: 'select' });
+    logger.error("Supabase rejection fetch error", {
+      error: err.message,
+      language,
+      context: 'analyze.rejections',
+    });
     return [];
   }
 }
@@ -120,7 +154,11 @@ async function processSingleFileAnalysis(code, language, rejectionComments = [])
   let geminiResult = { rawReview: 'Gemini analysis unavailable', suggestions: [] };
 
   try {
-    console.log(`=== STARTING ANALYSIS FOR ${language} ===`);
+    logger.info(`Starting analysis for ${language}`, {
+      language,
+      codeLength: code.length,
+      context: 'analyze.single',
+    });
 
     // Static analysis branches
     if (language === "python") {
@@ -128,6 +166,7 @@ async function processSingleFileAnalysis(code, language, rejectionComments = [])
       fs.writeFileSync(tempFile, code);
 
       const scriptPath = path.join(__dirname, "../python/analyze_python.py");
+      const pylintStart = process.hrtime.bigint();
 
       try {
         // Use exec and always read stdout (pylint may exit non-zero for syntax errors)
@@ -139,18 +178,35 @@ async function processSingleFileAnalysis(code, language, rejectionComments = [])
           });
         });
 
-        console.log("Python STDOUT:", stdout);
-        console.log("Python STDERR:", stderr);
+        const pylintSec = Number(process.hrtime.bigint() - pylintStart) / 1e9;
+        pylintDuration.observe(pylintSec);
+
+        logger.info("Pylint analysis completed", {
+          language,
+          duration_sec: pylintSec.toFixed(3),
+          stdout_length: stdout?.length || 0,
+          context: 'analyze.pylint',
+        });
 
         try {
           const cleanOutput = stdout.trim().split("\n").find(line => line.trim().startsWith("["));
           staticSuggestions = cleanOutput ? JSON.parse(cleanOutput) : [];
         } catch (e) {
-          console.error("JSON parse failed for python static output:", e);
+          logger.error("Pylint JSON parse failed", {
+            error: e.message,
+            context: 'analyze.pylint',
+          });
           staticSuggestions = [];
         }
       } catch (err) {
-        console.warn("Python analysis failed (continuing):", err.message || err);
+        const pylintSec = Number(process.hrtime.bigint() - pylintStart) / 1e9;
+        pylintDuration.observe(pylintSec);
+        staticAnalysisErrors.inc({ tool: 'pylint' });
+        logger.warn("Python analysis failed (continuing)", {
+          error: err.message || String(err),
+          duration_sec: pylintSec.toFixed(3),
+          context: 'analyze.pylint',
+        });
         staticSuggestions = [];
       } finally {
         if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
@@ -167,24 +223,42 @@ async function processSingleFileAnalysis(code, language, rejectionComments = [])
       staticSuggestions = await analyzeCpp(code, ext);
 
     } else {
-      console.warn(`Unsupported language: ${language}`);
+      logger.warn(`Unsupported language: ${language}`, {
+        language,
+        context: 'analyze.single',
+      });
       staticSuggestions = [];
     }
 
     // ALWAYS call Gemini for review
-    console.log(`=== CALLING GEMINI FOR ${language} ===`);
-    geminiResult = await reviewWithGemini(code, language, rejectionComments);
-    console.log(`=== GEMINI RESULT FOR ${language} ===`, { 
-      rawReviewPreview: geminiResult.rawReview?.substring(0, 100) + '...',
-      rawReviewLength: geminiResult.rawReview?.length || 0,
-      suggestionsCount: geminiResult.suggestions?.length || 0
+    logger.info(`Calling Gemini for ${language} review`, {
+      language,
+      codeLength: code.length,
+      rejectionCount: rejectionComments.length,
+      context: 'analyze.gemini',
     });
+    geminiResult = await reviewWithGemini(code, language, rejectionComments);
+    logger.info(`Gemini review completed for ${language}`, {
+      language,
+      rawReviewLength: geminiResult.rawReview?.length || 0,
+      suggestionsCount: geminiResult.suggestions?.length || 0,
+      context: 'analyze.gemini',
+    });
+
+    // Record issue count metrics
+    reviewIssuesTotal.observe(
+      { language, source: 'static' },
+      staticSuggestions.length
+    );
+    reviewIssuesTotal.observe(
+      { language, source: 'gemini' },
+      geminiResult.suggestions?.length || 0
+    );
 
     // -----------------------------
     // Normalize Gemini suggestion line numbers to actual file
     // -----------------------------
     if (Array.isArray(geminiResult.suggestions) && geminiResult.suggestions.length > 0) {
-      const before = geminiResult.suggestions.map(s => ({ line: s.line, message: s.message }));
       geminiResult.suggestions = geminiResult.suggestions.map((s) => {
         try {
           const copy = { ...s };
@@ -210,28 +284,34 @@ async function processSingleFileAnalysis(code, language, rejectionComments = [])
           }
           return copy;
         } catch (e) {
-          console.warn("Normalization failure for suggestion:", e);
+          logger.warn("Line normalization failure", {
+            error: e.message,
+            context: 'analyze.normalize',
+          });
           return s;
         }
       });
-
-      console.log("=== Gemini suggestions lines BEFORE normalization ===", before);
-      console.log("=== Gemini suggestions lines AFTER normalization ===", geminiResult.suggestions.map(s => ({ line: s.line, message: s.message })));
     }
 
   } catch (err) {
-    console.error(`Analysis failed for ${language}:`, err);
+    logger.error(`Analysis failed for ${language}`, {
+      error: err.message,
+      stack: err.stack,
+      language,
+      context: 'analyze.single',
+    });
     geminiResult = { rawReview: `Error during analysis: ${err.message}`, suggestions: [] };
   }
 
   // Merge static suggestions with Gemini suggestions properly
   const allSuggestions = [...staticSuggestions, ...geminiResult.suggestions];
 
-  console.log(`=== FINAL ANALYSIS STRUCTURE FOR ${language} ===`, {
+  logger.info(`Analysis complete for ${language}`, {
+    language,
     staticCount: staticSuggestions.length,
-    geminiSuggestionsCount: geminiResult.suggestions.length,
+    geminiCount: geminiResult.suggestions.length,
     totalSuggestions: allSuggestions.length,
-    geminiRawReviewLength: geminiResult.rawReview?.length || 0
+    context: 'analyze.single',
   });
 
   return {
@@ -245,24 +325,46 @@ router.post("/", async (req, res) => {
   const { language, code } = req.body;
   if (!language || !code) return res.status(400).json({ error: "Missing code or language" });
 
+  const reviewStart = process.hrtime.bigint();
+  reviewsSubmittedTotal.inc({ type: 'single' });
+
+  logger.info('Single-file review submitted', {
+    language,
+    codeLength: code.length,
+    context: 'analyze.single',
+  });
+
   const rejectionComments = await getRejectionComments(code, language);
 
   try {
     const analysis = await processSingleFileAnalysis(code, language, rejectionComments);
 
-    console.log(`=== SINGLE-FILE RESPONSE STRUCTURE FOR ${language} ===`, {
-      hasGeminiReview: !!analysis.geminiReview,
-      geminiRawReviewExists: !!analysis.geminiReview.rawReview && analysis.geminiReview.rawReview !== 'Gemini analysis unavailable',
+    const durationSec = Number(process.hrtime.bigint() - reviewStart) / 1e9;
+    reviewDuration.observe({ type: 'single', language }, durationSec);
+    reviewsCompletedTotal.inc({ type: 'single', status: 'success' });
+
+    logger.info('Single-file review completed', {
+      language,
       suggestionsCount: analysis.suggestions.length,
-      geminiSuggestionsCount: analysis.geminiReview.suggestions.length,
-      responseKeys: Object.keys(analysis)
+      duration_sec: durationSec.toFixed(3),
+      context: 'analyze.single',
     });
 
     // Send the exact structure that the frontend expects
     res.json(analysis);
 
   } catch (err) {
-    console.error("Single-file analysis failed:", err);
+    const durationSec = Number(process.hrtime.bigint() - reviewStart) / 1e9;
+    reviewDuration.observe({ type: 'single', language }, durationSec);
+    reviewsCompletedTotal.inc({ type: 'single', status: 'failure' });
+
+    logger.error("Single-file analysis failed", {
+      error: err.message,
+      stack: err.stack,
+      language,
+      duration_sec: durationSec.toFixed(3),
+      context: 'analyze.single',
+    });
     res.status(500).json({ 
       error: "Analysis failed", 
       suggestions: [], 
@@ -273,7 +375,12 @@ router.post("/", async (req, res) => {
 
 // --------------------- MULTI-FILE ANALYSIS ---------------------
 router.post("/multi", upload.array("files"), (req, res) => {
-  console.log('=== MULTI-FILE REQUEST RECEIVED ===', { fileCount: req.files?.length });
+  reviewsSubmittedTotal.inc({ type: 'multi' });
+  
+  logger.info('Multi-file review request received', {
+    fileCount: req.files?.length,
+    context: 'analyze.multi',
+  });
   
   // Add to queue to prevent concurrent processing
   multiFileQueue.push({
@@ -281,22 +388,26 @@ router.post("/multi", upload.array("files"), (req, res) => {
     res, 
     handler: handleMultiFileAnalysis
   });
+  reviewQueueSize.set(multiFileQueue.length);
   
   processQueue();
 });
 
 async function handleMultiFileAnalysis(req, res) {
+  const reviewStart = process.hrtime.bigint();
   
   if (!req.files || !req.files.length) {
-    console.error('=== NO FILES IN REQUEST ===');
+    logger.warn('Multi-file request received with no files', {
+      context: 'analyze.multi',
+    });
     return res.status(400).json({ error: "No files uploaded" });
   }
 
-  console.log('=== FILES RECEIVED ===', req.files.map(f => ({
-    originalname: f.originalname,
-    size: f.size,
-    mimetype: f.mimetype
-  })));
+  logger.info('Processing multi-file analysis', {
+    fileCount: req.files.length,
+    files: req.files.map(f => ({ name: f.originalname, size: f.size })),
+    context: 'analyze.multi',
+  });
 
   try {
     // Parse paths if provided
@@ -308,22 +419,21 @@ async function handleMultiFileAnalysis(req, res) {
     
     for (let i = 0; i < req.files.length; i++) {
       const file = req.files[i];
-      console.log(`=== Processing file: ${file.originalname} ===`);
-      
       const code = fs.readFileSync(file.path, "utf8");
-      console.log(`=== File ${file.originalname} read, length: ${code.length} ===`);
       
       // Determine filename (from paths or originalname)
       let filename = file.originalname;
       if (parsedPaths && Array.isArray(parsedPaths) && parsedPaths[i]) {
         filename = parsedPaths[i];
-        console.log(`=== Using client path: ${filename} for file ${file.originalname} ===`);
       }
       
       const detectedLang = detectLanguage(filename);
       
       if (!detectedLang) {
-        console.warn(`Unsupported file type: ${filename}`);
+        logger.warn(`Unsupported file type: ${filename}`, {
+          filename,
+          context: 'analyze.multi',
+        });
         // Still include unsupported files for context but mark them
         projectFiles.push({
           filename,
@@ -344,10 +454,11 @@ async function handleMultiFileAnalysis(req, res) {
       fs.unlinkSync(file.path);
     }
 
-    console.log(`=== STARTING ENHANCED MULTI-FILE ANALYSIS ===`, {
+    logger.info('Starting enhanced multi-file analysis', {
       totalFiles: projectFiles.length,
       supportedFiles: projectFiles.filter(f => f.supported).length,
-      languages: [...new Set(projectFiles.filter(f => f.supported).map(f => f.language))]
+      languages: [...new Set(projectFiles.filter(f => f.supported).map(f => f.language))],
+      context: 'analyze.multi',
     });
 
     // Use enhanced multi-file analysis
@@ -366,15 +477,29 @@ async function handleMultiFileAnalysis(req, res) {
       });
     }
 
-    console.log(`=== SENDING MULTI-FILE RESPONSE ===`, { 
+    const durationSec = Number(process.hrtime.bigint() - reviewStart) / 1e9;
+    reviewDuration.observe({ type: 'multi', language: 'mixed' }, durationSec);
+    reviewsCompletedTotal.inc({ type: 'multi', status: 'success' });
+
+    logger.info('Multi-file analysis completed', {
       resultCount: results.length,
-      sampleStructure: results[0] ? Object.keys(results[0]) : 'No results'
+      duration_sec: durationSec.toFixed(3),
+      context: 'analyze.multi',
     });
     
     res.json({ results });
     
   } catch (error) {
-    console.error('=== MULTI-FILE ANALYSIS ERROR ===', error);
+    const durationSec = Number(process.hrtime.bigint() - reviewStart) / 1e9;
+    reviewDuration.observe({ type: 'multi', language: 'mixed' }, durationSec);
+    reviewsCompletedTotal.inc({ type: 'multi', status: 'failure' });
+
+    logger.error('Multi-file analysis error', {
+      error: error.message,
+      stack: error.stack,
+      duration_sec: durationSec.toFixed(3),
+      context: 'analyze.multi',
+    });
     if (!res.headersSent) {
       res.status(500).json({ error: 'Multi-file analysis failed', details: error.message });
     }
