@@ -17,6 +17,8 @@
 
 *Most code review tools are either static linters that miss context or AI wrappers that hallucinate fixes. DevGuard combines both — and learns from your rejections.*
 
+![DevGuard-AI Home Page](docs/home.png)
+
 </div>
 
 ---
@@ -202,8 +204,7 @@ The auto-provisioned **"DevGuard-AI Observability"** dashboard contains 16 panel
 | **System & Feedback** | Feedback Accept vs Reject · Node.js Heap Usage · Event Loop Lag |
 | **Logs** | Log Volume by Level (Loki) · Recent Error Logs (Last 50) |
 
-<!-- Add your Grafana dashboard screenshot here -->
-<!-- ![DevGuard-AI Grafana Dashboard](docs/grafana-dashboard.png) -->
+![DevGuard-AI Grafana Dashboard](docs/grafana.png)
 
 ### Security Notes
 
