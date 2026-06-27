@@ -303,7 +303,7 @@ DevGuard/
 ### 1. Clone and Install
 
 ```bash
-git clone https://github.com/Daksh-Devguard/DevGuard-AI.git
+git clone https://github.com/Dakshh-Agarwal/DevGuard-AI
 cd DevGuard-AI
 
 # Install server dependencies
