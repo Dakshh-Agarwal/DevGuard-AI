@@ -36,19 +36,26 @@ function metricsMiddleware(req, res, next) {
   const startTime = process.hrtime.bigint();
   httpActiveRequests.inc();
 
-  // Record on response finish
-  res.on('finish', () => {
+  let isFinished = false;
+  const recordMetrics = () => {
+    if (isFinished) return;
+    isFinished = true;
+
     httpActiveRequests.dec();
 
     const route = normalizeRoute(req);
     const method = req.method;
-    const statusCode = res.statusCode.toString();
+    const statusCode = res.headersSent ? res.statusCode.toString() : '499';
     const durationNs = Number(process.hrtime.bigint() - startTime);
     const durationSec = durationNs / 1e9;
 
     httpRequestsTotal.inc({ method, route, status_code: statusCode });
     httpRequestDuration.observe({ method, route }, durationSec);
-  });
+  };
+
+  // Record on response finish or client close (abort)
+  res.on('finish', recordMetrics);
+  res.on('close', recordMetrics);
 
   next();
 }

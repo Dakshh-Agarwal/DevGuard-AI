@@ -179,6 +179,33 @@ const feedbackDecisionsTotal = new client.Counter({
 });
 
 // ============================================================
+// Zero-Initialization of Sparse Metrics
+// ============================================================
+// Zero-initialize counters to prevent Prometheus rate() from dropping single events.
+
+// Gemini Calls
+const geminiModels = ['gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-2.5-flash'];
+geminiModels.forEach(model => {
+  ['success', 'failure', 'fallback'].forEach(status => {
+    geminiCallsTotal.labels(model, status).inc(0);
+  });
+});
+geminiCallsTotal.labels('all', 'fallback').inc(0);
+
+// Reviews
+['single', 'multi'].forEach(type => {
+  reviewsSubmittedTotal.labels(type).inc(0);
+  ['success', 'failure'].forEach(status => {
+    reviewsCompletedTotal.labels(type, status).inc(0);
+  });
+});
+
+// Static Analysis
+['pylint', 'treesitter', 'checkstyle', 'eslint'].forEach(tool => {
+  staticAnalysisErrors.labels(tool).inc(0);
+});
+
+// ============================================================
 // Exports
 // ============================================================
 
