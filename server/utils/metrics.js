@@ -183,8 +183,9 @@ const feedbackDecisionsTotal = new client.Counter({
 // ============================================================
 // Zero-initialize counters to prevent Prometheus rate() from dropping single events.
 
-// Gemini Calls
-const geminiModels = ['gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-2.5-flash'];
+// Gemini Calls — model names MUST match what geminiReview.js uses at runtime
+// Runtime code uses: gemini-2.5-flash, gemini-2.5-pro, gemini-2.0-flash-lite
+const geminiModels = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash-lite'];
 geminiModels.forEach(model => {
   ['success', 'failure', 'fallback'].forEach(status => {
     geminiCallsTotal.labels(model, status).inc(0);
@@ -204,6 +205,10 @@ geminiCallsTotal.labels('all', 'fallback').inc(0);
 ['pylint', 'treesitter', 'checkstyle', 'eslint'].forEach(tool => {
   staticAnalysisErrors.labels(tool).inc(0);
 });
+
+// Gauges — initialize to 0 so they appear in /metrics from first scrape
+httpActiveRequests.set(0);
+reviewQueueSize.set(0);
 
 // ============================================================
 // Exports

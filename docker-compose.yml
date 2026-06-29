@@ -29,6 +29,8 @@ services:
   prometheus:
     image: prom/prometheus:v2.53.0
     container_name: devguard-prometheus
+    ports:
+      - "9090:9090"
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus

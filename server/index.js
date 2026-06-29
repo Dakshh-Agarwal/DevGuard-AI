@@ -21,11 +21,27 @@ app.use(metricsMiddleware);
 app.use(cors({
   origin: [
     'https://devguard.dakshagarwal.dev',
-    'https://d79onb379axx.cloudfront.net'
+    'https://d79onb379axx.cloudfront.net',
+    'http://localhost:5173',
+    'http://localhost:3000'
   ],
   credentials: true
 }));
 app.use(express.json());
+
+// ============================================================
+// Health endpoint — lightweight, no DB calls, excluded from metrics
+// ============================================================
+app.get('/health', (req, res) => {
+  logger.info("Health check ping", { context: "health_check" });
+  res.json({
+    status: 'ok',
+    service: 'devguard-backend',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    node_version: process.version,
+  });
+});
 
 // ============================================================
 // Routers

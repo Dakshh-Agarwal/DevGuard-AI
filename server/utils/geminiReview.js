@@ -16,11 +16,14 @@ const CRITICAL_TYPES = ["syntax", "logical", "semantic"];
 /* -----------------------------------------------
    Utility: Retry with exponential backoff
 ----------------------------------------------- */
-async function withRetries(fn, retries = 3, delay = 2000, modelName = 'unknown') {
+async function withRetries(fn, retries = 3, delay = 2000, modelName = 'unknown', timeoutMs = 45000) {
   let lastError;
   for (let i = 0; i < retries; i++) {
     try {
-      return await fn();
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(`Gemini request timed out after ${timeoutMs}ms`)), timeoutMs)
+      );
+      return await Promise.race([fn(), timeoutPromise]);
     } catch (err) {
       lastError = err;
       geminiRetriesTotal.inc({ model: modelName });
@@ -129,7 +132,7 @@ async function reviewWithGemini(
     return fallbackResponse("Missing Gemini API key");
   }
 
-  const models = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.0-pro"];
+  const models = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash-lite"];
   const rejectedLines = extractRejectedLines(rejectedMessages);
 
   // Add rejection info to the prompt

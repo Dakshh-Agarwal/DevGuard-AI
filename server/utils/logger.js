@@ -68,14 +68,23 @@ if (process.env.LOKI_URL) {
     transports.push(
       new LokiTransport({
         host: process.env.LOKI_URL,
+        // Static labels that are safe: low cardinality, bounded values
         labels: { service: 'devguard-backend' },
-        json: true,
+        json: false, // We will manually format as JSON via winston.format to prevent double encoding
         batching: true,
         interval: 5,
         replaceTimestamp: true,
-        dynamicLabels: true,
+        // CRITICAL: dynamicLabels: false
+        // With true, every metadata key (request_id, user_id, model, error, etc.)
+        // becomes a Loki stream label, creating millions of unique streams.
+        // Loki has a default limit of 10,000 streams and will reject ingestion.
+        // This is the #1 cause of Loki OOM in production Node.js apps.
+        dynamicLabels: false,
         gracefulShutdown: false,
         clearOnError: false,
+        format: winston.format.combine(
+          winston.format.json()
+        ),
         onConnectionError: (err) => {
           console.error('Loki connection error:', err.message);
         },

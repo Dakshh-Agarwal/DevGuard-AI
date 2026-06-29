@@ -28,8 +28,8 @@ function normalizeRoute(req) {
  * Tracks: request count, latency histogram, active request gauge.
  */
 function metricsMiddleware(req, res, next) {
-  // Skip metrics endpoint itself to avoid recursion
-  if (req.path === '/metrics') {
+  // Skip metrics and health endpoints to avoid polluting request metrics
+  if (req.path === '/metrics' || req.path === '/health') {
     return next();
   }
 

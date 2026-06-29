@@ -20,8 +20,8 @@ RUN mkdir -p temp
 
 EXPOSE 5000
 
-# Health check
+# Health check — uses the dedicated /health endpoint (lightweight, no DB calls)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget --spider --quiet http://localhost:5000/api/github/test || exit 1
+  CMD wget --spider --quiet http://localhost:5000/health || exit 1
 
 CMD ["node", "index.js"]
