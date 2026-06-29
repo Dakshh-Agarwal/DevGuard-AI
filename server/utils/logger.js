@@ -69,8 +69,6 @@ if (process.env.LOKI_URL) {
       new LokiTransport({
         host: process.env.LOKI_URL,
         labels: { service: 'devguard-backend' },
-        json: true,
-        replaceTimestamp: true,
         gracefulShutdown: false,
         clearOnError: false,
         onConnectionError: (err) => {
@@ -89,8 +87,7 @@ const logger = winston.createLogger({
   format: winston.format.combine(
     winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss.SSS' }),
     requestContextFormat(),
-    winston.format.errors({ stack: true }),
-    winston.format.json()
+    winston.format.errors({ stack: true })
   ),
   defaultMeta: { service: 'devguard-backend' },
   transports,
