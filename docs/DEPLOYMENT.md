@@ -1,30 +1,31 @@
-﻿# Deployment & Environment
+# Deployment & Environment
 
 ## Deployment Architecture
 
-```
-Internet
-    â”‚
-    â–¼
-Amazon CloudFront (CDN)
-    â”‚
-    â”œâ”€â”€ Static assets (JS, CSS, images) â”€â”€â”€ Amazon S3
-    â”‚
-    â””â”€â”€ /api/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ EC2 Instance (Ubuntu)
-                                                â”‚
-                                    â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”´â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
-                                    â”‚   Docker network:         â”‚
-                                    â”‚   devguard-network        â”‚
-                                    â”‚                           â”‚
-                                    â”‚  devguard-backend   :5000 â”‚
-                                    â”‚  devguard-prometheus :9090â”‚
-                                    â”‚  devguard-loki      :3100 â”‚
-                                    â”‚  devguard-promtail        â”‚
-                                    â”‚  devguard-grafana   :3001 â”‚
-                                    â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
-                                                â”‚
-                                    Named Docker volumes (persistent):
-                                    prometheus-data, loki-data, grafana-data
+```mermaid
+flowchart TD
+    Internet["🌐 Internet"]
+    CF["⚡ Cloudflare (DNS)"]
+    CDN["🌍 AWS CloudFront"]
+    S3["🪣 AWS S3 (React Static Assets)"]
+    EC2["🖥️ AWS EC2 (Ubuntu)"]
+    Docker["🐳 Docker Compose Network"]
+    
+    Prometheus["📈 Prometheus (:9090)"]
+    Grafana["📊 Grafana (:3001)"]
+    Loki["📝 Loki (:3100)"]
+    Backend["⚙️ Node.js Backend (:5000)"]
+
+    Internet --> CF
+    CF --> CDN
+    CDN --> S3
+    CF --> EC2
+    
+    EC2 --> Docker
+    Docker --> Backend
+    Docker --> Prometheus
+    Docker --> Grafana
+    Docker --> Loki
 ```
 
 All 5 containers share the `devguard-network` bridge network and communicate by service name (e.g., `http://loki:3100`). Named Docker volumes persist Prometheus data, Loki chunks, and Grafana state across container restarts and redeployments.

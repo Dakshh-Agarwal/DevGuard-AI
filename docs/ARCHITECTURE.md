@@ -1,4 +1,4 @@
-﻿# Architecture
+# Architecture
 
 ## Architecture
 
@@ -58,35 +58,21 @@ sequenceDiagram
 
 Every HTTP request passes through this middleware chain before reaching a route handler:
 
-```
-Incoming request
-    â”‚
-    â–¼
-requestContextMiddleware    â”€â”€ generates UUID request_id, sets up AsyncLocalStorage
-    â”‚
-    â–¼
-metricsMiddleware           â”€â”€ increments active gauge, starts hrtime timer
-    â”‚
-    â–¼
-CORS middleware             â”€â”€ allowlist: devguard.dakshagarwal.dev, CloudFront, localhost
-    â”‚
-    â–¼
-express.json()              â”€â”€ body parsing
-    â”‚
-    â–¼
-Route handler
-    â”‚
-    â”œâ”€â”€ verifyUserToken (protected routes)
-    â”‚       â””â”€â”€ supabase.auth.getUser(token)
-    â”‚               â””â”€â”€ setRequestUserId() â†’ writes user_id into AsyncLocalStorage
-    â”‚
-    â”œâ”€â”€ Business logic / AI pipeline / static analysis
-    â”‚
-    â””â”€â”€ Response
-            â”‚
-            â–¼
-    res.on('finish')
-    metricsMiddleware records: httpRequestsTotal, httpRequestDuration, httpActiveRequests.dec()
+```mermaid
+flowchart TD
+    A["Incoming HTTP Request"] --> B["requestContextMiddleware\n(generates UUID request_id, sets AsyncLocalStorage)"]
+    B --> C["metricsMiddleware\n(increments active gauge, starts timer)"]
+    C --> D["CORS middleware"]
+    D --> E["express.json()"]
+    E --> F["Route handler"]
+    
+    F -->|Protected routes| G["verifyUserToken\n(supabase.auth.getUser)"]
+    G --> H["setRequestUserId\n(writes user_id into AsyncLocalStorage)"]
+    H --> I["Business logic / AI / Static analysis"]
+    F -->|Public routes| I
+    
+    I --> J["Response"]
+    J --> K["res.on('finish')\nmetricsMiddleware records duration metrics"]
 ```
 
 ---
@@ -114,12 +100,12 @@ flowchart TD
 
 The review function iterates through three Gemini models. For each model, up to three calls are attempted with exponential backoff (2 s â†’ 4 s â†’ 8 s). Each call is wrapped in a `Promise.race` with a 45-second timeout to prevent the server from hanging on a degraded API.
 
-```
-gemini-2.5-flash      â†’ 3 attempts Ã— 45s timeout each
+```text
+gemini-2.5-flash      -> 3 attempts × 45s timeout each
          ↓ if all fail
-gemini-2.5-pro        â†’ 3 attempts Ã— 45s timeout each
+gemini-2.5-pro        -> 3 attempts × 45s timeout each
          ↓ if all fail
-gemini-2.0-flash-lite â†’ 3 attempts Ã— 45s timeout each
+gemini-2.0-flash-lite -> 3 attempts × 45s timeout each
          ↓ if all fail
 Fallback response returned — never throws an error to the client
 ```
