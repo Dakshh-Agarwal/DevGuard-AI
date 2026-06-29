@@ -69,11 +69,14 @@ if (process.env.LOKI_URL) {
       new LokiTransport({
         host: process.env.LOKI_URL,
         labels: { service: 'devguard-backend' },
-        json: false,
+        json: true,
         batching: true,
         interval: 5,
         replaceTimestamp: true,
-        dynamicLabels: true,
+        format: winston.format.combine(
+          winston.format.timestamp(),
+          winston.format.json()
+        ),
         gracefulShutdown: false,
         clearOnError: false,
         onConnectionError: (err) => {
