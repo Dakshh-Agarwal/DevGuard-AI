@@ -73,10 +73,7 @@ if (process.env.LOKI_URL) {
         batching: true,
         interval: 5,
         replaceTimestamp: true,
-        format: winston.format.combine(
-          winston.format.timestamp(),
-          winston.format.json()
-        ),
+        dynamicLabels: true,
         gracefulShutdown: false,
         clearOnError: false,
         onConnectionError: (err) => {
