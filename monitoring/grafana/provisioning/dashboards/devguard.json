@@ -401,7 +401,7 @@
       },
       "targets": [
         {
-          "expr": "sum by(level) (count_over_time({service=\"devguard-backend\"} | json [5m]))",
+          "expr": "sum by(level) (count_over_time({service=\"devguard-backend\"} [5m]))",
           "legendFormat": "{{level}}",
           "refId": "A"
         }
@@ -424,7 +424,7 @@
       },
       "targets": [
         {
-          "expr": "{service=\"devguard-backend\"} | json | level = \"error\"",
+          "expr": "{service=\"devguard-backend\", level=\"error\"}",
           "legendFormat": "",
           "refId": "A",
           "maxLines": 50

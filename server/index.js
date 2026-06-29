@@ -18,7 +18,13 @@ app.use(requestContextMiddleware);
 app.use(metricsMiddleware);
 
 // 3. Standard middleware
-app.use(cors());
+app.use(cors({
+  origin: [
+    'https://devguard.dakshagarwal.dev',
+    'https://d79onb379axx.cloudfront.net'
+  ],
+  credentials: true
+}));
 app.use(express.json());
 
 // ============================================================

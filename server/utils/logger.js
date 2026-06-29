@@ -64,13 +64,15 @@ const transports = [
 if (process.env.LOKI_URL) {
   try {
     const LokiTransport = require('winston-loki');
+    console.log("Initializing Loki transport at:", process.env.LOKI_URL);
     transports.push(
       new LokiTransport({
         host: process.env.LOKI_URL,
         labels: { service: 'devguard-backend' },
         json: true,
-        format: winston.format.json(),
         replaceTimestamp: true,
+        gracefulShutdown: false,
+        clearOnError: false,
         onConnectionError: (err) => {
           console.error('Loki connection error:', err.message);
         },
