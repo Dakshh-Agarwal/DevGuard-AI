@@ -2,23 +2,23 @@
 
 ## Security
 
-**JWT verification** â€” All protected routes call `supabase.auth.getUser(token)` server-side on every request. The token is never trusted without server-side validation.
+**JWT verification** — All protected routes call `supabase.auth.getUser(token)` server-side on every request. The token is never trusted without server-side validation.
 
-**OAuth CSRF protection** â€” A random `state` parameter is generated client-side, stored in `sessionStorage`, and verified on redirect before the authorization code is used.
+**OAuth CSRF protection** — A random `state` parameter is generated client-side, stored in `sessionStorage`, and verified on redirect before the authorization code is used.
 
-**OAuth code deduplication** â€” An in-memory `Set` prevents the same authorization code from being exchanged twice. Codes are removed from the Set after 5 minutes.
+**OAuth code deduplication** — An in-memory `Set` prevents the same authorization code from being exchanged twice. Codes are removed from the Set after 5 minutes.
 
-**Metrics endpoint protection** â€” `/metrics` requires HTTP Basic Authentication. Credentials are set via environment variables, not hardcoded.
+**Metrics endpoint protection** — `/metrics` requires HTTP Basic Authentication. Credentials are set via environment variables, not hardcoded.
 
-**Log sanitization** â€” Metadata keys containing `authorization`, `token`, `access_token`, `api_key`, `apikey`, `password`, `secret`, `client_secret`, or `cookie` are replaced with `[REDACTED]` before any log is emitted.
+**Log sanitization** — Metadata keys containing `authorization`, `token`, `access_token`, `api_key`, `apikey`, `password`, `secret`, `client_secret`, or `cookie` are replaced with `[REDACTED]` before any log is emitted.
 
-**CORS allowlist** â€” The backend accepts cross-origin requests only from:
+**CORS allowlist** — The backend accepts cross-origin requests only from:
 - `https://devguard.dakshagarwal.dev`
 - `https://d79onb379axx.cloudfront.net`
 - `http://localhost:5173`
 - `http://localhost:3000`
 
-**Role enforcement** â€” Team owner actions (remove member, change roles) verify the requesting user's role from Supabase before executing. Admin routes check the `is_admin` flag in the `profiles` table.
+**Role enforcement** — Team owner actions (remove member, change roles) verify the requesting user's role from Supabase before executing. Admin routes check the `is_admin` flag in the `profiles` table.
 
 **Known gaps:**
 - No rate limiting on analysis endpoints
@@ -42,7 +42,7 @@ Client              Backend                Supabase
   â”‚                    â””â”€ proceed to handler
 ```
 
-`verifyUserToken` calls `supabase.auth.getUser(token)` server-side on every protected request. After verification, it calls `setRequestUserId(user.id)`, which writes the user ID into `AsyncLocalStorage` â€” making it available to every downstream log line without explicit parameter passing.
+`verifyUserToken` calls `supabase.auth.getUser(token)` server-side on every protected request. After verification, it calls `setRequestUserId(user.id)`, which writes the user ID into `AsyncLocalStorage` — making it available to every downstream log line without explicit parameter passing.
 
 ### GitHub OAuth Flow
 

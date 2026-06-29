@@ -38,8 +38,8 @@ The backend Dockerfile includes a Docker health check: `wget --spider --quiet ht
 ### Prerequisites
 - Node.js 20+
 - Python 3 + pip (for Pylint)
-- Java 11+ (for Checkstyle â€” optional)
-- Docker + Docker Compose (for the monitoring stack â€” optional)
+- Java 11+ (for Checkstyle — optional)
+- Docker + Docker Compose (for the monitoring stack — optional)
 
 ### Setup
 
@@ -50,7 +50,7 @@ cd DevGuard-AI
 
 # 2. Configure backend environment
 cp server/.env.example server/.env
-# Edit server/.env â€” fill in GEMINI_API_KEY, SUPABASE_*, GITHUB_CLIENT_*
+# Edit server/.env — fill in GEMINI_API_KEY, SUPABASE_*, GITHUB_CLIENT_*
 
 # 3. Install dependencies
 cd server && npm install && cd ..
@@ -61,21 +61,21 @@ cd client && npm install && cd ..
 
 Open three terminals:
 
-**Terminal 1 â€” Backend:**
+**Terminal 1 — Backend:**
 ```bash
 cd server
 node index.js
 # Server starts at http://localhost:5000
 ```
 
-**Terminal 2 â€” Frontend:**
+**Terminal 2 — Frontend:**
 ```bash
 cd client
 npm run dev
 # Vite dev server starts at http://localhost:5173
 ```
 
-**Terminal 3 â€” Monitoring stack (optional):**
+**Terminal 3 — Monitoring stack (optional):**
 ```bash
 docker compose up -d prometheus loki promtail grafana
 # Grafana: http://localhost:3001 (admin / admin)
@@ -124,7 +124,7 @@ devguard-promtail   Up
 | Variable | Required | Description |
 |---|---|---|
 | `PORT` | Yes | Express server port (default: `5000`) |
-| `GEMINI_API_KEY` | Yes | Google Gemini API key â€” [get one here](https://ai.google.dev/) |
+| `GEMINI_API_KEY` | Yes | Google Gemini API key — [get one here](https://ai.google.dev/) |
 | `SUPABASE_URL` | Yes | Supabase project URL |
 | `SUPABASE_ANON_KEY` | Yes | Supabase anonymous key |
 | `SUPABASE_SERVICE_ROLE_KEY` | Yes | Supabase service role key (required for admin user lookups) |
@@ -171,7 +171,7 @@ docker logs devguard-backend --tail 50
 cd DevGuard-AI
 git pull origin main
 
-# Rebuild only the backend â€” other services are unaffected
+# Rebuild only the backend — other services are unaffected
 docker compose build --no-cache devguard-backend
 docker compose up -d --no-deps devguard-backend
 docker compose ps

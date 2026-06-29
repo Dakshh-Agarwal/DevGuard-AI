@@ -9,7 +9,7 @@ graph TD
     Backend["Express 5 Backend - Node.js 20 on EC2"]
     Supabase["Supabase - PostgreSQL + Auth"]
     Gemini["Google Gemini API\ngemini-2.5-flash / 2.5-pro / 2.0-flash-lite"]
-    StaticTools["Static Analyzers\nPylint Â· Checkstyle Â· Tree-sitter Â· Custom JS rules"]
+    StaticTools["Static Analyzers\nPylint · Checkstyle · Tree-sitter · Custom JS rules"]
     Prometheus["Prometheus v2.53 - 30d retention"]
     Loki["Loki v2.9 - Log aggregation"]
     Promtail["Promtail v2.9 - Docker log shipper"]
@@ -116,12 +116,12 @@ The review function iterates through three Gemini models. For each model, up to 
 
 ```
 gemini-2.5-flash      â†’ 3 attempts Ã— 45s timeout each
-         â†“ if all fail
+         ↓ if all fail
 gemini-2.5-pro        â†’ 3 attempts Ã— 45s timeout each
-         â†“ if all fail
+         ↓ if all fail
 gemini-2.0-flash-lite â†’ 3 attempts Ã— 45s timeout each
-         â†“ if all fail
-Fallback response returned â€” never throws an error to the client
+         ↓ if all fail
+Fallback response returned — never throws an error to the client
 ```
 
 ### JSON Enforcement
@@ -151,11 +151,11 @@ For multi-file submissions, each file is reviewed with additional prompt context
 
 ## Static Analysis Engines
 
-### Python â€” Pylint
+### Python — Pylint
 
 Submitted code is written to a temp file and `analyze_python.py` is invoked as a subprocess. The script runs Pylint with its JSON reporter and returns structured diagnostics. The temp file is deleted in a `finally` block regardless of outcome. Execution time is recorded in the `devguard_pylint_duration_seconds` histogram.
 
-### JavaScript â€” Custom Rule Engine
+### JavaScript — Custom Rule Engine
 
 `analyzeJS.js` scans each line with regex patterns for:
 - `console.log` calls left in production code
@@ -164,11 +164,11 @@ Submitted code is written to a temp file and `analyze_python.py` is invoked as a
 
 Runs in-process with nanosecond-precision timing via `process.hrtime.bigint()`.
 
-### Java â€” Checkstyle
+### Java — Checkstyle
 
 Checkstyle is invoked via `child_process.exec()` using the Google Java Style XML configuration. Output is parsed line by line, filtered to the submitted file's basename, and returned as structured suggestions. Execution time is recorded in `devguard_checkstyle_duration_seconds`.
 
-### C / C++ â€” Tree-sitter
+### C / C++ — Tree-sitter
 
 `node-tree-sitter` parses the submitted code into a concrete syntax tree using the CPP grammar. A recursive AST walker flags:
 - Function definitions (structural inventory)

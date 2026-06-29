@@ -20,6 +20,12 @@
 
 ---
 
+> **The Problem:** Traditional code reviews are bottlenecked by human bandwidth. Senior engineers spend hours nitpicking syntax or style guidelines, often missing structural design flaws. Teams struggle to maintain code consistency across multiple languages without overwhelming their leads.
+> 
+> **The Solution:** DevGuard-AI acts as an untiring Principal Engineer. It automatically merges output from industry-standard linters (Pylint, Checkstyle, Tree-sitter) with intelligent, context-aware suggestions from Google Gemini—delivering a comprehensive, deduplicated code review in seconds while recording robust operational metrics.
+
+---
+
 <div align="center">
 
 | Metric | Value |
@@ -118,6 +124,11 @@ flowchart TD
 ## Deployment Architecture
 
 The application is deployed across AWS and Supabase, utilizing CloudFront for global static asset distribution and Docker on EC2 for the resilient backend and monitoring stack.
+
+**Why this architecture?**
+- **S3 + CloudFront (CDN):** The React frontend is completely decoupled from the backend. Static assets are stored in an S3 bucket and cached globally at CloudFront Edge locations. This guarantees sub-50ms Time-to-Interactive globally and reduces load on the backend server to zero for UI rendering.
+- **Docker Compose on EC2:** The Node.js backend and the entire observability suite (Prometheus, Loki, Promtail, Grafana) run within an isolated Docker bridge network on an Ubuntu EC2 instance. This means services communicate securely via internal DNS (e.g., `http://loki:3100`), ensuring monitoring ports are never exposed to the public internet while remaining trivial to deploy (`docker-compose up`).
+- **Supabase (PostgreSQL & Auth):** Offloading the database and OAuth layer to a managed service provides enterprise-grade security and reliability without the maintenance burden of running a self-hosted PostgreSQL cluster.
 
 ```mermaid
 flowchart TD

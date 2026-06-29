@@ -57,7 +57,7 @@ All endpoints are served at `https://devguard.dakshagarwal.dev/api` (production)
 }
 ```
 
-> Multi-file requests are serialized through an in-memory queue â€” only one runs at a time to prevent CPU/memory saturation. Queue depth is tracked via the `devguard_review_queue_size` gauge.
+> Multi-file requests are serialized through an in-memory queue — only one runs at a time to prevent CPU/memory saturation. Queue depth is tracked via the `devguard_review_queue_size` gauge.
 
 ### Feedback
 

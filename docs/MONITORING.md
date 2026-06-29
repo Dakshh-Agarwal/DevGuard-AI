@@ -6,15 +6,15 @@
 
 Node.js `AsyncLocalStorage` (from `async_hooks`) propagates context across asynchronous boundaries without threading parameters through every function call.
 
-At the start of each request, `requestContextMiddleware` creates a store containing `{ request_id, user_id }` and runs the rest of the request inside it via `asyncLocalStorage.run(store, () => next())`. Any code downstream â€” including utility functions, the Gemini client, and Supabase helpers â€” calls `getRequestContext()` to retrieve these values. The Winston logger injects them into every log line as a custom format step.
+At the start of each request, `requestContextMiddleware` creates a store containing `{ request_id, user_id }` and runs the rest of the request inside it via `asyncLocalStorage.run(store, () => next())`. Any code downstream — including utility functions, the Gemini client, and Supabase helpers — calls `getRequestContext()` to retrieve these values. The Winston logger injects them into every log line as a custom format step.
 
 ```javascript
-// Deep inside geminiReview.js â€” request_id flows in automatically
+// Deep inside geminiReview.js — request_id flows in automatically
 logger.info('Gemini succeeded with gemini-2.5-flash', {
   model: 'gemini-2.5-flash',
   duration_sec: '2.341',
   context: 'gemini.success',
-  // request_id and user_id are injected automatically â€” never passed explicitly
+  // request_id and user_id are injected automatically — never passed explicitly
 });
 ```
 
@@ -34,8 +34,8 @@ There are **20 custom application metrics** registered under the `devguard_` nam
 | Metric | Type | Labels | Description |
 |---|---|---|---|
 | `devguard_http_requests_total` | Counter | `method`, `route`, `status_code` | Total HTTP requests |
-| `devguard_http_request_duration_seconds` | Histogram | `method`, `route` | Latency (buckets: 10msâ€“60s) |
-| `devguard_http_active_requests` | Gauge | â€” | In-flight requests at any instant |
+| `devguard_http_request_duration_seconds` | Histogram | `method`, `route` | Latency (buckets: 10ms”“60s) |
+| `devguard_http_active_requests` | Gauge | — | In-flight requests at any instant |
 
 Route labels are normalized to prevent cardinality explosion: `/api/teams/abc-123/members` becomes `/api/teams/:id/members`.
 
@@ -44,9 +44,9 @@ Route labels are normalized to prevent cardinality explosion: `/api/teams/abc-12
 | Metric | Type | Labels | Description |
 |---|---|---|---|
 | `devguard_gemini_calls_total` | Counter | `model`, `status` | Calls per model: success / failure / fallback |
-| `devguard_gemini_duration_seconds` | Histogram | `model` | Response latency per model (buckets: 500msâ€“120s) |
+| `devguard_gemini_duration_seconds` | Histogram | `model` | Response latency per model (buckets: 500ms”“120s) |
 | `devguard_gemini_retries_total` | Counter | `model` | Retry attempts per model |
-| `devguard_gemini_json_parse_errors_total` | Counter | â€” | Gemini JSON parse failures |
+| `devguard_gemini_json_parse_errors_total` | Counter | — | Gemini JSON parse failures |
 
 All three model names (`gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.0-flash-lite`) are zero-initialized at startup so Prometheus `rate()` functions work from the first event.
 
@@ -56,9 +56,9 @@ All three model names (`gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.0-flash-l
 |---|---|---|---|
 | `devguard_reviews_submitted_total` | Counter | `type` (single/multi) | Reviews submitted |
 | `devguard_reviews_completed_total` | Counter | `type`, `status` | Reviews completed by outcome |
-| `devguard_review_duration_seconds` | Histogram | `type`, `language` | End-to-end review time (buckets: 500msâ€“300s) |
+| `devguard_review_duration_seconds` | Histogram | `type`, `language` | End-to-end review time (buckets: 500ms”“300s) |
 | `devguard_review_issues_total` | Histogram | `language`, `source` | Issues found per review (static vs gemini) |
-| `devguard_review_queue_size` | Gauge | â€” | Multi-file queue depth |
+| `devguard_review_queue_size` | Gauge | — | Multi-file queue depth |
 
 #### Static Analysis Tools
 
@@ -88,9 +88,9 @@ Logs are batched and flushed to Loki every 5 seconds via `winston-loki`.
 
 **Key implementation decisions:**
 
-- `dynamicLabels: false` â€” Only the static label `service: "devguard-backend"` is sent to Loki. If dynamic labels were enabled, every `request_id`, `user_id`, and `model` value would create a new Loki stream, exhausting Loki's default 10,000-stream limit and causing out-of-memory crashes in production.
-- `json: false` with `format: winston.format.json()` â€” Winston pre-formats the payload as valid JSON before `winston-loki` sends it. This prevents the double-encoding bug that causes `JSONParserErr` in Grafana's `| json` pipeline.
-- **Sensitive field redaction** â€” Any metadata key containing `password`, `token`, `access_token`, `api_key`, `apikey`, `secret`, `client_secret`, `cookie`, or `authorization` is replaced with `[REDACTED]` before emission.
+- `dynamicLabels: false` — Only the static label `service: "devguard-backend"` is sent to Loki. If dynamic labels were enabled, every `request_id`, `user_id`, and `model` value would create a new Loki stream, exhausting Loki's default 10,000-stream limit and causing out-of-memory crashes in production.
+- `json: false` with `format: winston.format.json()` — Winston pre-formats the payload as valid JSON before `winston-loki` sends it. This prevents the double-encoding bug that causes `JSONParserErr` in Grafana's `| json` pipeline.
+- **Sensitive field redaction** — Any metadata key containing `password`, `token`, `access_token`, `api_key`, `apikey`, `secret`, `client_secret`, `cookie`, or `authorization` is replaced with `[REDACTED]` before emission.
 
 **Structured log format:**
 ```json
@@ -170,30 +170,30 @@ Access Grafana at `http://localhost:3001` with credentials `admin` / `admin`.
 **HTTP throughput:** ~3,000 req/s for lightweight endpoints on a single EC2 instance, as measured by the Phase 7 load test.
 
 **Analysis latency (single file):**
-- Normal conditions (Gemini API available): 2â€“6 seconds
-- Rate-limited with exponential backoff (HTTP 429): 6â€“45 seconds  
+- Normal conditions (Gemini API available): 2”“6 seconds
+- Rate-limited with exponential backoff (HTTP 429): 6”“45 seconds  
 - All three Gemini models failing: up to ~135 seconds before fallback (3 models Ã— 3 retries Ã— 45s timeout)
 
 **Multi-file queue:** Only one multi-file analysis runs at a time. This prevents concurrent Gemini API saturation and keeps server resources stable. Queue depth is visible in Grafana.
 
 **Loki batching:** Logs flush every 5 seconds, so there is up to a 5-second delay before new logs appear in Grafana's log panels.
 
-**Prometheus scrape interval:** 15 seconds. `rate()` queries over `[5m]` windows appear flat on low-traffic deployments â€” run the load test or shorten the rate window to generate visible data.
+**Prometheus scrape interval:** 15 seconds. `rate()` queries over `[5m]` windows appear flat on low-traffic deployments — run the load test or shorten the rate window to generate visible data.
 
 ---
 
 ---
 
-# DevGuard-AI â€” Monitoring & Observability Guide
+# DevGuard-AI — Monitoring & Observability Guide
 
 ## Quick Access
 
 | Service | URL | Credentials |
 |---|---|---|
 | **Grafana** | http://localhost:3001 | `admin` / `admin` |
-| **Prometheus** | http://localhost:9090 | â€” |
+| **Prometheus** | http://localhost:9090 | — |
 | **Metrics endpoint** | http://localhost:5000/metrics | `admin` / `devguard-metrics` |
-| **Loki** | http://localhost:3100 | â€” |
+| **Loki** | http://localhost:3100 | — |
 
 ---
 
@@ -203,7 +203,7 @@ Access Grafana at `http://localhost:3001` with credentials `admin` / `admin`.
 docker-compose up -d
 ```
 
-This starts 5 services: backend, Prometheus, Loki, Promtail, and Grafana. The Grafana dashboard is auto-provisioned â€” no manual setup required.
+This starts 5 services: backend, Prometheus, Loki, Promtail, and Grafana. The Grafana dashboard is auto-provisioned — no manual setup required.
 
 ---
 
@@ -336,7 +336,7 @@ sum by(context) (count_over_time({service="devguard-backend"} | json | level = "
 
 ## Adding a New Log Event
 
-Use the structured logger â€” never `console.log`:
+Use the structured logger — never `console.log`:
 
 ```javascript
 const logger = require('../utils/logger');
@@ -362,7 +362,7 @@ logger.error('Something failed', {
 });
 ```
 
-The `request_id` and `user_id` are automatically injected by the logger â€” no need to pass them.
+The `request_id` and `user_id` are automatically injected by the logger — no need to pass them.
 
 ---
 
