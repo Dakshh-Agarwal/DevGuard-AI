@@ -144,42 +144,37 @@ flowchart TD
 
 | Layer | Technology | Why |
 |---|---|---|
-| **Frontend** | AWS S3 + CloudFront CDN | Static files off EC2, global delivery |
-| **Backend** | AWS EC2 t3.micro + Docker Compose | Isolated, reproducible service stack |
-| **Backend HTTPS** | CloudFront distribution | HTTPS proxy over EC2:5000 |
-| **Database / Auth** | Supabase (PostgreSQL) | Managed database and auth layer |
+| **Frontend** | AWS S3 + CloudFront CDN | Globally distributed static hosting |
+| **Backend** | AWS EC2 (Ubuntu) + Docker Compose | Containerized Node.js backend and monitoring services |
+| **Backend HTTPS** | Dedicated CloudFront distribution | Proxying HTTPS requests to the EC2 backend |
+| **TLS/SSL** | AWS Certificate Manager (ACM) | Public certificate attached to CloudFront with TLS 1.3 |
+| **Database & Authentication** | Supabase (PostgreSQL + Auth) | Managed database and auth layer |
 | **Observability** | Prometheus + Loki + Grafana | Metrics, logs, dashboards |
-| **Process Manager** | PM2 | Keeps server process alive on EC2 |
-| **Static IP** | AWS Elastic IP | Stable address for deployment and DNS |
-| **Memory Safety** | Swap file | Prevents OOM crashes on small instances |
+| **Process Management** | PM2 | Process supervision and automatic restarts |
+| **Networking** | AWS Elastic IP | Stable backend connectivity |
+| **Memory Protection** | 1.5 GB swap file | Prevents OOM crashes on the t3.micro instance |
 | **Region** | AWS ap-south-2 (Hyderabad) | Low-latency for Indian users |
 
 > For detailed deployment architecture, environment variables, and Docker setup, see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ```mermaid
 flowchart TD
-    Internet["🌐 Internet"]
-    CF["⚡ Cloudflare (DNS)"]
-    CDN["🌍 AWS CloudFront"]
-    S3["🪣 AWS S3 (React Static Assets)"]
-    EC2["🖥️ AWS EC2 (Ubuntu)"]
-    Docker["🐳 Docker Compose Network"]
+    Internet["Internet"] --> DNS["Cloudflare DNS"]
     
-    Prometheus["📈 Prometheus (:9090)"]
-    Grafana["📊 Grafana (:3001)"]
-    Loki["📝 Loki (:3100)"]
-    Backend["⚙️ Node.js Backend (:5000)"]
-
-    Internet --> CF
-    CF --> CDN
-    CDN --> S3
-    CF --> EC2
+    DNS --> CFF["CloudFront\n(Frontend)"]
+    DNS --> CFB["CloudFront\n(Backend Proxy)"]
     
-    EC2 --> Docker
-    Docker --> Backend
-    Docker --> Prometheus
-    Docker --> Grafana
-    Docker --> Loki
+    CFF --> S3["AWS S3"]
+    CFB --> EC2["AWS EC2 (Ubuntu)"]
+    
+    EC2 --> Docker["Docker Compose"]
+    
+    Docker --> Backend["Backend"]
+    Docker --> Prometheus["Prometheus"]
+    Docker --> Loki["Loki"]
+    Docker --> Grafana["Grafana"]
+    
+    Backend --> Supabase["Supabase (DB/Auth)"]
 ```
 
 ---

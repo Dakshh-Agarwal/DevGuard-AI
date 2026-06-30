@@ -6,38 +6,24 @@ DevGuard-AI is deployed across three managed services, each chosen to solve a sp
 
 ```mermaid
 flowchart TD
-    Internet["🌐 Internet"]
-    DNS["⚡ Cloudflare DNS"]
+    Internet["Internet"] --> DNS["Cloudflare DNS"]
     
-    subgraph Frontend
-        CDN["🌍 AWS CloudFront CDN"]
-        S3["🪣 AWS S3 Bucket"]
-    end
+    DNS --> CFF["CloudFront\n(Frontend)"]
+    DNS --> CFB["CloudFront\n(Backend Proxy)"]
     
-    subgraph "AWS EC2 — t3.micro (Ubuntu)"
-        PM2["PM2 Process Manager"]
-        subgraph "Docker Compose Bridge Network"
-            Backend["⚙️ Node.js Backend\n(:5000)"]
-            Prometheus["📈 Prometheus\n(:9090)"]
-            Loki["📝 Loki\n(:3100)"]
-            Promtail["📋 Promtail"]
-            Grafana["📊 Grafana\n(:3001)"]
-        end
-    end
-
-    subgraph Supabase
-        DB["PostgreSQL Database"]
-        Auth["Auth (JWT + OAuth)"]
-    end
-
-    Internet --> DNS
-    DNS --> CDN
-    CDN --> S3
-    DNS --> Backend
-    Backend --> DB
-    Backend --> Auth
-    Backend -.->|structured JSON logs| Loki
-    Prometheus -.->|scrape /metrics every 15s| Backend
+    CFF --> S3["AWS S3 Bucket"]
+    CFB --> EC2["AWS EC2 — t3.micro (Ubuntu)"]
+    
+    EC2 --> Docker["Docker Compose Bridge Network"]
+    
+    Docker --> Backend["⚙️ Node.js Backend (:5000)"]
+    Docker --> Prometheus["📈 Prometheus (:9090)"]
+    Docker --> Loki["📝 Loki (:3100)"]
+    Docker --> Promtail["📋 Promtail"]
+    Docker --> Grafana["📊 Grafana (:3001)"]
+    
+    Backend --> Supabase["Supabase (PostgreSQL + Auth)"]
+    Prometheus -.->|scrape /metrics| Backend
     Promtail -.->|Docker container logs| Loki
     Prometheus --> Grafana
     Loki --> Grafana
@@ -66,7 +52,7 @@ docker-compose up -d
 
 ### Backend HTTPS: CloudFront as Reverse Proxy
 
-A second CloudFront distribution sits in front of the EC2 instance's port 5000, providing HTTPS termination for the API without requiring Nginx or Certbot configuration on the instance itself.
+A dedicated CloudFront distribution sits in front of the EC2 instance's port 5000, providing HTTPS termination for the API. An AWS Certificate Manager (ACM) public certificate is attached to this CloudFront distribution enforcing TLS 1.3, securing transit without requiring Nginx or Certbot configuration on the instance itself.
 
 ### Database: Supabase
 
@@ -84,12 +70,12 @@ PM2 keeps the backend process alive across server restarts and crashes. On the E
 
 An AWS Elastic IP is assigned to the EC2 instance so the DNS records remain stable across instance stop/start cycles. Without this, every reboot would assign a new public IP, breaking CloudFront origin configuration and Cloudflare DNS records.
 
-### Memory Safety: Swap File
+### Memory Protection: Swap File
 
-The t3.micro instance has 1 GB of RAM. During heavy multi-file analysis (which can spike memory when Pylint, Tree-sitter, and Gemini API calls run concurrently), a 2 GB swap file prevents the Linux OOM killer from terminating Docker containers:
+The t3.micro instance has 1 GB of RAM. During heavy multi-file analysis (which can spike memory when Pylint, Tree-sitter, and Gemini API calls run concurrently), a 1.5 GB swap file prevents the Linux OOM killer from terminating Docker containers:
 
 ```bash
-sudo fallocate -l 2G /swapfile
+sudo fallocate -l 1.5G /swapfile
 sudo chmod 600 /swapfile
 sudo mkswap /swapfile
 sudo swapon /swapfile
