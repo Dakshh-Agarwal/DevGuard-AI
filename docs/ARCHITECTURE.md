@@ -1,19 +1,21 @@
 # Architecture
 
-## Architecture
+## System Overview
+
+DevGuard-AI is a full-stack code review platform built around three pillars: **AI-assisted analysis**, **multi-language static analysis**, and **production-grade observability**. The frontend is a React 19 SPA served via CloudFront/S3, and the backend is an Express 5 API running inside Docker on EC2, backed by Supabase for persistence and authentication.
 
 ```mermaid
 graph TD
-    Browser["Browser - React 19 + Vite"]
+    Browser["Browser — React 19 + Vite"]
     CloudFront["CloudFront CDN + S3"]
-    Backend["Express 5 Backend - Node.js 20 on EC2"]
-    Supabase["Supabase - PostgreSQL + Auth"]
+    Backend["Express 5 Backend — Node.js 20 on EC2"]
+    Supabase["Supabase — PostgreSQL + Auth"]
     Gemini["Google Gemini API\ngemini-2.5-flash / 2.5-pro / 2.0-flash-lite"]
     StaticTools["Static Analyzers\nPylint · Checkstyle · Tree-sitter · Custom JS rules"]
-    Prometheus["Prometheus v2.53 - 30d retention"]
-    Loki["Loki v2.9 - Log aggregation"]
-    Promtail["Promtail v2.9 - Docker log shipper"]
-    Grafana["Grafana v10.4 - 16-panel dashboard"]
+    Prometheus["Prometheus v2.53 — 30d retention"]
+    Loki["Loki v2.9 — Log aggregation"]
+    Promtail["Promtail v2.9 — Docker log shipper"]
+    Grafana["Grafana v10.4 — 16-panel dashboard"]
 
     Browser -->|HTTPS| CloudFront
     CloudFront -->|serves static assets| Browser
@@ -28,7 +30,11 @@ graph TD
     Loki -->|datasource| Grafana
 ```
 
-### API Data Flow
+---
+
+## API Data Flow
+
+The sequence below shows what happens when a user submits code for review via `POST /api/analyze/multi`:
 
 ```mermaid
 sequenceDiagram
@@ -54,7 +60,9 @@ sequenceDiagram
     Express-->>Browser: Final Suggestions (HTTP 200)
 ```
 
-### Request Lifecycle
+---
+
+## Request Lifecycle
 
 Every HTTP request passes through this middleware chain before reaching a route handler:
 
@@ -75,6 +83,12 @@ flowchart TD
     J --> K["res.on('finish')\nmetricsMiddleware records duration metrics"]
 ```
 
+**Key implementation details:**
+
+- `requestContextMiddleware` runs first. It generates a UUID `request_id`, attaches it to `req.requestId`, sets the `X-Request-ID` response header, and creates an `AsyncLocalStorage` store for the lifetime of the request.
+- `metricsMiddleware` skips `/health` and `/metrics` to prevent internal traffic from polluting dashboards. It increments `devguard_http_active_requests`, and on `res.finish` records `devguard_http_requests_total` and `devguard_http_request_duration_seconds`.
+- Route normalization replaces UUIDs and numeric IDs in paths with `:id` to prevent Prometheus cardinality explosion.
+
 ---
 
 ## AI Review Pipeline
@@ -84,11 +98,11 @@ flowchart TD
     A["POST /api/analyze"] --> B["Fetch rejection history from Supabase"]
     B --> C["Run language-specific static analyzer"]
     C --> D["Build Gemini prompt with rejection notes + static context"]
-    D --> E{"Try gemini-2.5-flash\n3 attempts x 45s timeout"}
+    D --> E{"Try gemini-2.5-flash\n3 attempts × 45s timeout"}
     E -->|success| H
-    E -->|all fail| F{"Try gemini-2.5-pro\n3 attempts x 45s timeout"}
+    E -->|all fail| F{"Try gemini-2.5-pro\n3 attempts × 45s timeout"}
     F -->|success| H
-    F -->|all fail| G{"Try gemini-2.0-flash-lite\n3 attempts x 45s timeout"}
+    F -->|all fail| G{"Try gemini-2.0-flash-lite\n3 attempts × 45s timeout"}
     G -->|success| H
     G -->|all fail| I["Return fallback response with generic suggestions"]
     H["Parse JSON response, filter rejected lines, normalize suggestions"]
@@ -98,7 +112,7 @@ flowchart TD
 
 ### Model Selection and Retry Logic
 
-The review function iterates through three Gemini models. For each model, up to three calls are attempted with exponential backoff (2 s â†’ 4 s â†’ 8 s). Each call is wrapped in a `Promise.race` with a 45-second timeout to prevent the server from hanging on a degraded API.
+The review function iterates through three Gemini models. For each model, up to three calls are attempted with exponential backoff (2s → 4s → 8s). Each call is wrapped in a `Promise.race` with a 45-second timeout to prevent the server from hanging on a degraded API.
 
 ```text
 gemini-2.5-flash      -> 3 attempts × 45s timeout each
@@ -163,5 +177,25 @@ Checkstyle is invoked via `child_process.exec()` using the Google Java Style XML
 - Standalone `void` return types
 
 Timing is recorded in `devguard_treesitter_duration_seconds`.
+
+---
+
+## Frontend Architecture
+
+The frontend is a React 19 SPA built with Vite. Key pages:
+
+| Page | Path | Purpose |
+|---|---|---|
+| Home | `/` | Landing page with feature overview |
+| Login / Signup | `/login`, `/signup` | Supabase email/password auth |
+| GitHub Callback | `/github-callback` | GitHub OAuth token exchange |
+| Editor | `/editor` | CodeMirror-based code editor with AI review |
+| Teams | `/teams` | Team listing and navigation |
+| Leader Dashboard | `/leader/:teamId` | Team lead analytics (Recharts) |
+| Member Dashboard | `/member/:teamId` | Member-specific review history |
+| Admin Dashboard | `/admin` | Admin-only system analytics |
+| Create / Join Team | `/create-team`, `/join/:teamId` | Team management flows |
+
+The editor uses CodeMirror 6 with language extensions for Python, JavaScript, Java, and C/C++, providing syntax highlighting and bracket matching during code review.
 
 ---

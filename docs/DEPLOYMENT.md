@@ -1,181 +1,178 @@
-# Deployment & Environment
+# Deployment
 
-## Deployment Architecture
+## Architecture Overview
+
+DevGuard-AI is deployed across three managed services, each chosen to solve a specific infrastructure constraint:
 
 ```mermaid
 flowchart TD
     Internet["🌐 Internet"]
-    CF["⚡ Cloudflare (DNS)"]
-    CDN["🌍 AWS CloudFront"]
-    S3["🪣 AWS S3 (React Static Assets)"]
-    EC2["🖥️ AWS EC2 (Ubuntu)"]
-    Docker["🐳 Docker Compose Network"]
+    DNS["⚡ Cloudflare DNS"]
     
-    Prometheus["📈 Prometheus (:9090)"]
-    Grafana["📊 Grafana (:3001)"]
-    Loki["📝 Loki (:3100)"]
-    Backend["⚙️ Node.js Backend (:5000)"]
+    subgraph Frontend
+        CDN["🌍 AWS CloudFront CDN"]
+        S3["🪣 AWS S3 Bucket"]
+    end
+    
+    subgraph "AWS EC2 — t3.micro (Ubuntu)"
+        PM2["PM2 Process Manager"]
+        subgraph "Docker Compose Bridge Network"
+            Backend["⚙️ Node.js Backend\n(:5000)"]
+            Prometheus["📈 Prometheus\n(:9090)"]
+            Loki["📝 Loki\n(:3100)"]
+            Promtail["📋 Promtail"]
+            Grafana["📊 Grafana\n(:3001)"]
+        end
+    end
 
-    Internet --> CF
-    CF --> CDN
+    subgraph Supabase
+        DB["PostgreSQL Database"]
+        Auth["Auth (JWT + OAuth)"]
+    end
+
+    Internet --> DNS
+    DNS --> CDN
     CDN --> S3
-    CF --> EC2
-    
-    EC2 --> Docker
-    Docker --> Backend
-    Docker --> Prometheus
-    Docker --> Grafana
-    Docker --> Loki
+    DNS --> Backend
+    Backend --> DB
+    Backend --> Auth
+    Backend -.->|structured JSON logs| Loki
+    Prometheus -.->|scrape /metrics every 15s| Backend
+    Promtail -.->|Docker container logs| Loki
+    Prometheus --> Grafana
+    Loki --> Grafana
 ```
-
-All 5 containers share the `devguard-network` bridge network and communicate by service name (e.g., `http://loki:3100`). Named Docker volumes persist Prometheus data, Loki chunks, and Grafana state across container restarts and redeployments.
-
-The backend Dockerfile includes a Docker health check: `wget --spider --quiet http://localhost:5000/health` every 30 seconds. After 3 consecutive failures Docker marks the container `unhealthy`.
 
 ---
 
-## Local Development
+## Why This Architecture
 
-### Prerequisites
-- Node.js 20+
-- Python 3 + pip (for Pylint)
-- Java 11+ (for Checkstyle — optional)
-- Docker + Docker Compose (for the monitoring stack — optional)
+### Frontend: S3 + CloudFront
 
-### Setup
+The React frontend is completely decoupled from the backend. After `vite build`, the static output (`dist/`) is uploaded to an S3 bucket and served through CloudFront's global edge network. This approach:
+- Reduces backend load to zero for UI rendering
+- Serves assets from the nearest edge location
+- Provides automatic HTTPS via CloudFront's managed certificate
+
+The backend server never handles static file requests.
+
+### Backend: Docker Compose on EC2
+
+The Node.js API and the entire observability suite run within an isolated Docker bridge network on an Ubuntu EC2 instance. Services communicate through internal DNS (e.g., `http://loki:3100`), which means monitoring ports are never exposed to the public internet. The entire stack is deployed with a single command:
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/Dakshh-Agarwal/DevGuard-AI.git
-cd DevGuard-AI
-
-# 2. Configure backend environment
-cp server/.env.example server/.env
-# Edit server/.env — fill in GEMINI_API_KEY, SUPABASE_*, GITHUB_CLIENT_*
-
-# 3. Install dependencies
-cd server && npm install && cd ..
-cd client && npm install && cd ..
+docker-compose up -d
 ```
 
-### Running
+### Backend HTTPS: CloudFront as Reverse Proxy
 
-Open three terminals:
+A second CloudFront distribution sits in front of the EC2 instance's port 5000, providing HTTPS termination for the API without requiring Nginx or Certbot configuration on the instance itself.
 
-**Terminal 1 — Backend:**
+### Database: Supabase
+
+Supabase provides PostgreSQL and authentication as a managed service. This eliminates the need to self-host a database on a resource-constrained t3.micro instance, while providing:
+- Row-level security policies
+- JWT-based authentication
+- OAuth provider management (GitHub)
+- Admin API for user management
+
+### Process Manager: PM2
+
+PM2 keeps the backend process alive across server restarts and crashes. On the EC2 instance, PM2 manages the Docker Compose lifecycle and ensures the stack restarts after an OS reboot.
+
+### Static IP: Elastic IP
+
+An AWS Elastic IP is assigned to the EC2 instance so the DNS records remain stable across instance stop/start cycles. Without this, every reboot would assign a new public IP, breaking CloudFront origin configuration and Cloudflare DNS records.
+
+### Memory Safety: Swap File
+
+The t3.micro instance has 1 GB of RAM. During heavy multi-file analysis (which can spike memory when Pylint, Tree-sitter, and Gemini API calls run concurrently), a 2 GB swap file prevents the Linux OOM killer from terminating Docker containers:
+
 ```bash
-cd server
-node index.js
-# Server starts at http://localhost:5000
+sudo fallocate -l 2G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 ```
 
-**Terminal 2 — Frontend:**
-```bash
-cd client
-npm run dev
-# Vite dev server starts at http://localhost:5173
-```
+### Region: ap-south-2 (Hyderabad)
 
-**Terminal 3 — Monitoring stack (optional):**
-```bash
-docker compose up -d prometheus loki promtail grafana
-# Grafana: http://localhost:3001 (admin / admin)
-# Prometheus: http://localhost:9090
-```
-
-> If `LOKI_URL` is not set in `server/.env`, Winston logs to console only and the Loki transport is silently skipped. The monitoring stack is entirely optional during local development.
+The EC2 instance is deployed in AWS's Hyderabad region to minimize API latency for Indian users, where the primary user base is located.
 
 ---
 
-## Docker Setup
+## Docker Compose Services
 
-The full application stack (backend + monitoring) is defined in `docker-compose.yml`. The frontend is deployed separately to CloudFront/S3.
+The `docker-compose.yml` defines five services on a shared bridge network:
 
-```bash
-# Start all 5 services
-docker compose up -d
+| Service | Image | Port | Purpose |
+|---|---|---|---|
+| `devguard-backend` | Custom (Dockerfile) | 5000 | Express API with Pylint, JDK 11, Tree-sitter |
+| `prometheus` | `prom/prometheus:v2.53.0` | 9090 | Metrics collection with 30-day retention |
+| `loki` | `grafana/loki:2.9.0` | 3100 | Log aggregation |
+| `promtail` | `grafana/promtail:2.9.0` | — | Ships Docker container logs to Loki |
+| `grafana` | `grafana/grafana:10.4.0` | 3001 | Visualization with auto-provisioned dashboards |
 
-# Rebuild backend after code changes
-docker compose build --no-cache devguard-backend
-docker compose up -d --no-deps devguard-backend
+### Backend Dockerfile
 
-# Tail backend logs
-docker compose logs -f devguard-backend
+The backend container is built from `node:20-alpine` and installs:
+- Python 3 + pip + Pylint (for Python static analysis)
+- OpenJDK 11 JRE (for Checkstyle Java analysis)
+- Node.js production dependencies via `npm ci --production`
 
-# Check container statuses
-docker compose ps
-```
+A Docker `HEALTHCHECK` pings `/health` every 30 seconds:
 
-Expected healthy state:
-```
-Name                    State          Ports
-devguard-backend    Up (healthy)   0.0.0.0:5000->5000/tcp
-devguard-grafana    Up             0.0.0.0:3001->3000/tcp
-devguard-loki       Up             0.0.0.0:3100->3100/tcp
-devguard-prometheus Up             0.0.0.0:9090->9090/tcp
-devguard-promtail   Up
+```dockerfile
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget --spider --quiet http://localhost:5000/health || exit 1
 ```
 
 ---
 
 ## Environment Variables
 
-### Backend (`server/.env`)
+Copy `server/.env.example` to `server/.env` and fill in your values:
 
 | Variable | Required | Description |
 |---|---|---|
-| `PORT` | Yes | Express server port (default: `5000`) |
-| `GEMINI_API_KEY` | Yes | Google Gemini API key — [get one here](https://ai.google.dev/) |
+| `PORT` | Yes | Server port (default: `5000`) |
+| `GEMINI_API_KEY` | Yes | Google Gemini API key |
 | `SUPABASE_URL` | Yes | Supabase project URL |
 | `SUPABASE_ANON_KEY` | Yes | Supabase anonymous key |
-| `SUPABASE_SERVICE_ROLE_KEY` | Yes | Supabase service role key (required for admin user lookups) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Yes | Supabase service role key (admin operations) |
 | `GITHUB_CLIENT_ID` | Yes | GitHub OAuth App client ID |
 | `GITHUB_CLIENT_SECRET` | Yes | GitHub OAuth App client secret |
-| `VITE_FRONTEND_URL` | Yes | Frontend base URL (used when generating team join links) |
-| `LOKI_URL` | Optional | Loki push endpoint. Set to `http://loki:3100` in Docker |
-| `METRICS_USER` | Optional | Basic auth username for `/metrics` (default: `admin`) |
-| `METRICS_PASS` | Optional | Basic auth password for `/metrics` (default: `devguard-metrics`) |
-| `LOG_LEVEL` | Optional | Winston log level: `error` / `warn` / `info` / `debug` (default: `info`) |
-
-### Frontend (`client/.env`)
-
-| Variable | Required | Description |
-|---|---|---|
-| `VITE_BACKEND_URL` | Yes | Backend API base URL (e.g., `http://localhost:5000`) |
-| `VITE_GITHUB_CLIENT_ID` | Yes | GitHub OAuth App client ID (must match the backend value) |
+| `VITE_FRONTEND_URL` | Yes | Frontend URL (for team invite links) |
+| `LOKI_URL` | No | Loki endpoint (auto-set in Docker: `http://loki:3100`) |
+| `METRICS_USER` | No | Basic auth username for `/metrics` (default: `admin`) |
+| `METRICS_PASS` | No | Basic auth password for `/metrics` (default: `devguard-metrics`) |
+| `LOG_LEVEL` | No | Winston log level (default: `info`) |
 
 ---
 
-## Production Deployment
-
-### Initial EC2 setup
+## Local Development
 
 ```bash
-ssh -i your-key.pem ubuntu@<ec2-ip>
-
+# Clone the repository
 git clone https://github.com/Dakshh-Agarwal/DevGuard-AI.git
 cd DevGuard-AI
 
-cp server/.env.example server/.env
-nano server/.env   # fill in all required values
+# Start the monitoring stack
+docker-compose up -d
 
-docker compose build --no-cache devguard-backend
-docker compose up -d
+# Install and run the backend
+cd server
+cp .env.example .env   # Fill in your keys
+npm install
+node index.js
 
-docker compose ps
-docker logs devguard-backend --tail 50
+# Install and run the frontend (separate terminal)
+cd client
+npm install
+npm run dev
 ```
 
-### Updating a running deployment
-
-```bash
-cd DevGuard-AI
-git pull origin main
-
-# Rebuild only the backend — other services are unaffected
-docker compose build --no-cache devguard-backend
-docker compose up -d --no-deps devguard-backend
-docker compose ps
-```
+The frontend runs at `http://localhost:5173`, the backend at `http://localhost:5000`, and Grafana at `http://localhost:3001`.
 
 ---

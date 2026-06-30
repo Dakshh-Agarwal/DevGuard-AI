@@ -20,9 +20,9 @@
 
 ---
 
-> **The Problem:** Traditional code reviews are bottlenecked by human bandwidth. Senior engineers spend hours nitpicking syntax or style guidelines, often missing structural design flaws. Teams struggle to maintain code consistency across multiple languages without overwhelming their leads.
+> **The Problem:** Traditional code reviews are bottlenecked by human bandwidth. Senior engineers spend hours nitpicking syntax or style issues, often missing structural design flaws. Teams struggle to maintain code consistency across multiple languages without overwhelming their leads.
 > 
-> **The Solution:** DevGuard-AI acts as an untiring Principal Engineer. It automatically merges output from industry-standard linters (Pylint, Checkstyle, Tree-sitter) with intelligent, context-aware suggestions from Google Gemini—delivering a comprehensive, deduplicated code review in seconds while recording robust operational metrics.
+> **The Solution:** DevGuard-AI acts as an untiring Principal Engineer. It merges output from industry-standard linters (Pylint, Checkstyle, Tree-sitter) with context-aware suggestions from Google Gemini — delivering a comprehensive, deduplicated code review in seconds while recording robust operational metrics.
 
 ---
 
@@ -33,28 +33,53 @@
 | **Languages Supported** | 5 |
 | **Docker Containers** | 5 |
 | **REST Endpoints** | 23+ |
-| **Custom Metrics** | 20 |
-| **Grafana Panels** | 16 |
-| **Runtime Tests** | 57 |
+| **Custom Prometheus Metrics** | 20 |
+| **Grafana Dashboard Panels** | 16 |
+| **Runtime Validation Tests** | 57 |
 | **Load Tested** | 30k reqs |
-| **AI Models** | 3 |
+| **AI Models (Gemini)** | 3 |
 | **Static Analyzers** | 4 |
 
 </div>
 
 ---
 
-> [!IMPORTANT]
-> **Runtime Verified**
->
-> The monitoring stack is automatically validated using a custom 7-phase runtime validation suite that executes live queries and traffic to check:
-> * Backend & API health
-> * Prometheus scrape targets
-> * Grafana datasource provisioning
-> * 14 Prometheus dashboard queries
-> * 4 Loki LogQL queries
-> * Structured JSON log schema and secret sanitization
-> * Sustained 10s load test (3,000+ req/s)
+## Screenshots
+
+<table>
+  <tr>
+    <td align="center"><strong>Landing Page</strong></td>
+    <td align="center"><strong>Code Editor</strong></td>
+  </tr>
+  <tr>
+    <td><img src="docs/Images/Homepage.jpg" alt="Landing Page" width="450"/></td>
+    <td><img src="docs/Images/Code_editor.jpg" alt="Code Editor" width="450"/></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>GitHub Integration</strong></td>
+    <td align="center"><strong>Team Collaboration</strong></td>
+  </tr>
+  <tr>
+    <td><img src="docs/Images/GithubIntegration.jpg" alt="GitHub Integration" width="450"/></td>
+    <td><img src="docs/Images/Collabration.jpg" alt="Team Collaboration" width="450"/></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>Admin Dashboard</strong></td>
+    <td align="center"><strong>Team Management</strong></td>
+  </tr>
+  <tr>
+    <td><img src="docs/Images/Admin_DashBoard.jpg" alt="Admin Dashboard" width="450"/></td>
+    <td><img src="docs/Images/Team.jpg" alt="Team Management" width="450"/></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>Grafana — Observability Dashboard (Top)</strong></td>
+    <td align="center"><strong>Grafana — Observability Dashboard (Bottom)</strong></td>
+  </tr>
+  <tr>
+    <td><img src="docs/Images/Grafnaa_1.png" alt="Grafana Dashboard Top" width="450"/></td>
+    <td><img src="docs/Images/Grafna-2.png" alt="Grafana Dashboard Bottom" width="450"/></td>
+  </tr>
+</table>
 
 ---
 
@@ -62,17 +87,11 @@
 
 This README provides a high-level overview. For deep technical details, refer to the `docs/` directory:
 
-- 📊 **[Monitoring & Observability](docs/MONITORING.md)** (Prometheus, Loki, Grafana, LogQL)
-- 🏗️ **[Architecture & Pipeline](docs/ARCHITECTURE.md)** (AI fallback chain, Static Tools)
-- 🔌 **[API Reference](docs/API.md)** (REST Endpoints, JSON Schemas)
-- 🚀 **[Deployment & Environment](docs/DEPLOYMENT.md)** (EC2, Docker Compose, Env Vars)
-- 🔒 **[Security & Authentication](docs/SECURITY.md)** (JWT, OAuth, RBAC)
-
----
-
-## Screenshots
-
-*(Screenshots will be placed here — Landing Page, Code Editor, AI Review Results, Team Dashboard, Grafana Dashboard, Prometheus, Loki, Docker)*
+- 📊 **[Monitoring & Observability](docs/MONITORING.md)** — Prometheus, Loki, Grafana, runtime validation
+- 🏗️ **[Architecture & Pipeline](docs/ARCHITECTURE.md)** — AI fallback chain, static analysis, request flow
+- 🔌 **[API Reference](docs/API.md)** — REST endpoints, JSON schemas, authentication
+- 🚀 **[Deployment & Environment](docs/DEPLOYMENT.md)** — EC2, Docker Compose, environment variables
+- 🔒 **[Security & Authentication](docs/SECURITY.md)** — JWT, OAuth, RBAC, log sanitization
 
 ---
 
@@ -121,14 +140,21 @@ flowchart TD
 
 ---
 
-## Deployment Architecture
+## Deployment Stack
 
-The application is deployed across AWS and Supabase, utilizing CloudFront for global static asset distribution and Docker on EC2 for the resilient backend and monitoring stack.
+| Layer | Technology | Why |
+|---|---|---|
+| **Frontend** | AWS S3 + CloudFront CDN | Static files off EC2, global delivery |
+| **Backend** | AWS EC2 t3.micro + Docker Compose | Isolated, reproducible service stack |
+| **Backend HTTPS** | CloudFront distribution | HTTPS proxy over EC2:5000 |
+| **Database / Auth** | Supabase (PostgreSQL) | Managed database and auth layer |
+| **Observability** | Prometheus + Loki + Grafana | Metrics, logs, dashboards |
+| **Process Manager** | PM2 | Keeps server process alive on EC2 |
+| **Static IP** | AWS Elastic IP | Stable address for deployment and DNS |
+| **Memory Safety** | Swap file | Prevents OOM crashes on small instances |
+| **Region** | AWS ap-south-2 (Hyderabad) | Low-latency for Indian users |
 
-**Why this architecture?**
-- **S3 + CloudFront (CDN):** The React frontend is completely decoupled from the backend. Static assets are stored in an S3 bucket and cached globally at CloudFront Edge locations. This guarantees sub-50ms Time-to-Interactive globally and reduces load on the backend server to zero for UI rendering.
-- **Docker Compose on EC2:** The Node.js backend and the entire observability suite (Prometheus, Loki, Promtail, Grafana) run within an isolated Docker bridge network on an Ubuntu EC2 instance. This means services communicate securely via internal DNS (e.g., `http://loki:3100`), ensuring monitoring ports are never exposed to the public internet while remaining trivial to deploy (`docker-compose up`).
-- **Supabase (PostgreSQL & Auth):** Offloading the database and OAuth layer to a managed service provides enterprise-grade security and reliability without the maintenance burden of running a self-hosted PostgreSQL cluster.
+> For detailed deployment architecture, environment variables, and Docker setup, see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ```mermaid
 flowchart TD
@@ -179,7 +205,23 @@ flowchart TD
 >
 > Naively logging `request_id` as a label in Loki causes stream explosion (Loki limits streams to 10k by default), quickly crashing the server in production.
 >
-> We disabled dynamic labels in the Winston-Loki transport. Only the `service` name is sent as a stream label. The `request_id` and `user_id` are serialized into the JSON payload, making them heavily indexed for LogQL filtering (`| json | request_id="..."`) without generating memory-crashing streams.
+> We disabled dynamic labels in the Winston-Loki transport. Only the `service` name is sent as a stream label. The `request_id` and `user_id` are serialized into the JSON payload, making them queryable via LogQL (`| json | request_id="..."`) without generating memory-crashing streams.
+
+---
+
+## Runtime Validation
+
+> [!IMPORTANT]
+> **Runtime Verified**
+>
+> The monitoring stack is automatically validated using a custom 7-phase runtime validation suite that executes live queries and traffic to verify:
+> * Backend & API health
+> * Prometheus scrape targets
+> * Grafana datasource provisioning
+> * 14 Prometheus dashboard queries
+> * 4 Loki LogQL queries
+> * Structured JSON log schema and secret sanitization
+> * Sustained 10s load test (3,000+ req/s)
 
 ---
 

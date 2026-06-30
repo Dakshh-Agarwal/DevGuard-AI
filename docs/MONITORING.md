@@ -1,406 +1,275 @@
-﻿# Monitoring & Observability
+# Monitoring & Observability
 
-## Monitoring and Observability
+DevGuard-AI ships with a complete observability stack: **Prometheus** for metrics, **Loki** for logs, and **Grafana** for visualization. Every layer of the application — HTTP, AI pipeline, static analysis, database, OAuth, and feedback — is instrumented.
 
-### Request Tracing with AsyncLocalStorage
+<img src="Images/Grafnaa_1.png" alt="Grafana Dashboard — Top" width="100%"/>
+<img src="Images/Grafna-2.png" alt="Grafana Dashboard — Bottom" width="100%"/>
 
-Node.js `AsyncLocalStorage` (from `async_hooks`) propagates context across asynchronous boundaries without threading parameters through every function call.
+---
 
-At the start of each request, `requestContextMiddleware` creates a store containing `{ request_id, user_id }` and runs the rest of the request inside it via `asyncLocalStorage.run(store, () => next())`. Any code downstream — including utility functions, the Gemini client, and Supabase helpers — calls `getRequestContext()` to retrieve these values. The Winston logger injects them into every log line as a custom format step.
+## Observability Flow
 
-```javascript
-// Deep inside geminiReview.js — request_id flows in automatically
-logger.info('Gemini succeeded with gemini-2.5-flash', {
-  model: 'gemini-2.5-flash',
-  duration_sec: '2.341',
-  context: 'gemini.success',
-  // request_id and user_id are injected automatically — never passed explicitly
-});
-```
-
-Trace a full request in Loki:
-```logql
-{service="devguard-backend"} | json | request_id = "a1b2c3d4"
+```mermaid
+flowchart LR
+    Backend["Node.js Backend"]
+    
+    subgraph "Metrics Path"
+        Prom["Prometheus\nscrapes /metrics every 15s"]
+    end
+    
+    subgraph "Logging Path"
+        Winston["Winston Logger"]
+        LokiTransport["winston-loki transport"]
+        Loki["Loki"]
+    end
+    
+    Grafana["Grafana\n16-panel dashboard"]
+    
+    Backend -->|basic auth protected| Prom
+    Backend --> Winston
+    Winston --> LokiTransport
+    LokiTransport -->|batched every 5s| Loki
+    Prom --> Grafana
+    Loki --> Grafana
 ```
 
 ---
 
-### Prometheus Metrics
+## Prometheus Metrics
 
-There are **20 custom application metrics** registered under the `devguard_` namespace, plus all default Node.js runtime metrics collected via `client.collectDefaultMetrics()`. The `/metrics` endpoint requires HTTP Basic Authentication (`admin` / `devguard-metrics` by default, configurable via env vars). The runtime validation script (Phase 6) confirms that 18 of these metric names are present in the raw `/metrics` output immediately after startup, before any analysis requests are made.
+All metrics are registered on a custom `prom-client` registry under the `devguard_` prefix. Default Node.js metrics (event loop lag, heap, GC, CPU) are also collected.
 
-#### HTTP Layer
+### HTTP Layer (3 metrics)
 
 | Metric | Type | Labels | Description |
 |---|---|---|---|
 | `devguard_http_requests_total` | Counter | `method`, `route`, `status_code` | Total HTTP requests |
-| `devguard_http_request_duration_seconds` | Histogram | `method`, `route` | Latency (buckets: 10ms”“60s) |
-| `devguard_http_active_requests` | Gauge | — | In-flight requests at any instant |
+| `devguard_http_request_duration_seconds` | Histogram | `method`, `route` | Request latency. Buckets: 10ms → 60s |
+| `devguard_http_active_requests` | Gauge | — | Currently in-flight requests |
 
-Route labels are normalized to prevent cardinality explosion: `/api/teams/abc-123/members` becomes `/api/teams/:id/members`.
-
-#### Gemini AI
+### Gemini AI Layer (4 metrics)
 
 | Metric | Type | Labels | Description |
 |---|---|---|---|
-| `devguard_gemini_calls_total` | Counter | `model`, `status` | Calls per model: success / failure / fallback |
-| `devguard_gemini_duration_seconds` | Histogram | `model` | Response latency per model (buckets: 500ms”“120s) |
-| `devguard_gemini_retries_total` | Counter | `model` | Retry attempts per model |
-| `devguard_gemini_json_parse_errors_total` | Counter | — | Gemini JSON parse failures |
+| `devguard_gemini_calls_total` | Counter | `model`, `status` | Total Gemini API calls. Status: `success`, `failure`, `fallback` |
+| `devguard_gemini_duration_seconds` | Histogram | `model` | Gemini API latency. Buckets: 0.5s → 120s |
+| `devguard_gemini_retries_total` | Counter | `model` | Total retry attempts across all models |
+| `devguard_gemini_json_parse_errors_total` | Counter | — | Failed JSON parses from Gemini responses |
 
-All three model names (`gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.0-flash-lite`) are zero-initialized at startup so Prometheus `rate()` functions work from the first event.
-
-#### Review Pipeline
+### Code Review Pipeline (5 metrics)
 
 | Metric | Type | Labels | Description |
 |---|---|---|---|
-| `devguard_reviews_submitted_total` | Counter | `type` (single/multi) | Reviews submitted |
-| `devguard_reviews_completed_total` | Counter | `type`, `status` | Reviews completed by outcome |
-| `devguard_review_duration_seconds` | Histogram | `type`, `language` | End-to-end review time (buckets: 500ms”“300s) |
-| `devguard_review_issues_total` | Histogram | `language`, `source` | Issues found per review (static vs gemini) |
-| `devguard_review_queue_size` | Gauge | — | Multi-file queue depth |
+| `devguard_reviews_submitted_total` | Counter | `type` | Reviews submitted. Type: `single`, `multi` |
+| `devguard_reviews_completed_total` | Counter | `type`, `status` | Reviews completed. Status: `success`, `failure` |
+| `devguard_review_duration_seconds` | Histogram | `type`, `language` | End-to-end review latency. Buckets: 0.5s → 300s |
+| `devguard_review_issues_total` | Histogram | `language`, `source` | Issues flagged per review. Source: `static`, `gemini` |
+| `devguard_review_queue_size` | Gauge | — | Current multi-file queue depth |
 
-#### Static Analysis Tools
-
-| Metric | Type | Description |
-|---|---|---|
-| `devguard_pylint_duration_seconds` | Histogram | Pylint subprocess execution time |
-| `devguard_treesitter_duration_seconds` | Histogram | Tree-sitter parse time |
-| `devguard_checkstyle_duration_seconds` | Histogram | Checkstyle subprocess execution time |
-| `devguard_static_analysis_errors_total` | Counter | Tool failures, labeled by `tool` |
-
-#### Auth, Database, and Feedback
+### Static Analysis (4 metrics)
 
 | Metric | Type | Labels | Description |
 |---|---|---|---|
-| `devguard_oauth_attempts_total` | Counter | `status` | GitHub OAuth: success / failure / duplicate |
-| `devguard_supabase_query_duration_seconds` | Histogram | `table`, `operation` | Database query latency |
-| `devguard_supabase_errors_total` | Counter | `table`, `operation` | Database errors |
-| `devguard_feedback_decisions_total` | Counter | `decision`, `suggestion_type` | Accept/reject counts |
+| `devguard_pylint_duration_seconds` | Histogram | — | Pylint execution time |
+| `devguard_treesitter_duration_seconds` | Histogram | — | Tree-sitter C/C++ parse time |
+| `devguard_checkstyle_duration_seconds` | Histogram | — | Checkstyle Java execution time |
+| `devguard_static_analysis_errors_total` | Counter | `tool` | Static analysis failures. Tool: `pylint`, `treesitter`, `checkstyle`, `eslint` |
 
-All standard Node.js runtime metrics (heap, event loop lag, GC) are collected under the `devguard_` prefix via `client.collectDefaultMetrics()`.
+### GitHub OAuth (1 metric)
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `devguard_oauth_attempts_total` | Counter | `status` | OAuth attempts. Status: `success`, `failure`, `duplicate` |
+
+### Supabase / Database (2 metrics)
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `devguard_supabase_query_duration_seconds` | Histogram | `table`, `operation` | Query latency by table and operation |
+| `devguard_supabase_errors_total` | Counter | `table`, `operation` | Query failures |
+
+### Feedback Loop (1 metric)
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `devguard_feedback_decisions_total` | Counter | `decision`, `suggestion_type` | Accept/reject decisions by suggestion type |
+
+**Total: 20 custom metrics**
 
 ---
 
-### Loki Logging
+## Zero-Initialization
 
-Logs are batched and flushed to Loki every 5 seconds via `winston-loki`.
+Sparse counters are zero-initialized at startup to prevent `rate()` from dropping the first event. All three Gemini models are pre-registered with `success`, `failure`, and `fallback` statuses. Review counters for `single` and `multi` types are also pre-seeded. This ensures Grafana panels show data from the very first request.
 
-**Key implementation decisions:**
+---
 
-- `dynamicLabels: false` — Only the static label `service: "devguard-backend"` is sent to Loki. If dynamic labels were enabled, every `request_id`, `user_id`, and `model` value would create a new Loki stream, exhausting Loki's default 10,000-stream limit and causing out-of-memory crashes in production.
-- `json: false` with `format: winston.format.json()` — Winston pre-formats the payload as valid JSON before `winston-loki` sends it. This prevents the double-encoding bug that causes `JSONParserErr` in Grafana's `| json` pipeline.
-- **Sensitive field redaction** — Any metadata key containing `password`, `token`, `access_token`, `api_key`, `apikey`, `secret`, `client_secret`, `cookie`, or `authorization` is replaced with `[REDACTED]` before emission.
+## Prometheus Configuration
 
-**Structured log format:**
+Prometheus is configured in `monitoring/prometheus.yml`:
+
+```yaml
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'devguard-backend'
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+    basic_auth:
+      username: admin
+      password: devguard-metrics
+    static_configs:
+      - targets: ['devguard-backend:5000']
+        labels:
+          service: 'devguard-backend'
+          environment: 'production'
+```
+
+The `devguard-backend:5000` target uses Docker's internal DNS. Prometheus authenticates with the basic auth credentials set on the `/metrics` endpoint. Data is retained for 30 days (`--storage.tsdb.retention.time=30d`).
+
+---
+
+## Structured Logging (Winston → Loki)
+
+### Log Format
+
+Every log line is a JSON object with automatic context injection:
+
 ```json
 {
-  "timestamp": "2026-06-29 15:12:49.165",
+  "timestamp": "2026-06-30 10:15:42.123",
   "level": "info",
-  "message": "Single-file review completed",
+  "message": "Gemini succeeded with gemini-2.5-flash",
   "service": "devguard-backend",
   "request_id": "a1b2c3d4-e5f6-...",
-  "user_id": "7890abcd-...",
-  "language": "python",
-  "suggestionsCount": 7,
-  "duration_sec": "4.213",
-  "context": "analyze.single"
+  "user_id": "f7g8h9i0-...",
+  "model": "gemini-2.5-flash",
+  "duration_sec": "3.142",
+  "context": "gemini.success"
 }
 ```
 
-**Common LogQL queries** (via Grafana Explore at `http://localhost:3001`):
+### Context Field Convention
+
+Every structured log includes a `context` field that acts as a namespaced category for LogQL filtering:
+
+| Context | Meaning |
+|---|---|
+| `auth.verify` | JWT token verification |
+| `gemini.prompt` | Prompt construction |
+| `gemini.success` | Successful Gemini call |
+| `gemini.failure` | Failed Gemini attempt |
+| `gemini.fallback` | All models exhausted |
+| `gemini.retry` | Retry attempt |
+| `gemini.parse` | JSON parse error |
+| `analyze.single` | Single-file analysis |
+| `analyze.multi` | Multi-file analysis |
+| `analyze.pylint` | Pylint execution |
+| `analyze.treesitter` | Tree-sitter parsing |
+| `github.oauth` | GitHub OAuth flow |
+| `teams.create` | Team creation |
+| `stats.dashboard` | Admin stats fetch |
+
+### Loki Transport Configuration
+
+The Winston-Loki transport is configured with `dynamicLabels: false`. This is a critical design decision — if enabled, every metadata key (`request_id`, `user_id`, `model`, etc.) would become a Loki stream label, creating millions of unique streams. Loki has a default limit of 10,000 streams and would reject ingestion or crash under load.
+
+Instead, only `service: 'devguard-backend'` is sent as a static stream label. All other fields are serialized into the JSON log line and queried with LogQL's JSON parser:
 
 ```logql
-# All error logs
-{service="devguard-backend"} | json | level = "error"
-
-# Trace a single request end-to-end
-{service="devguard-backend"} | json | request_id = "a1b2c3d4"
-
-# Slow reviews (> 10 seconds)
-{service="devguard-backend"} | json | context = "analyze.single" | duration_sec > 10
-
-# Gemini model failures
-{service="devguard-backend"} | json | context = "gemini.failure"
-
-# GitHub OAuth events
-{service="devguard-backend"} | json | context = "github.oauth"
-
-# Error rate by context over 5 minutes
-sum by(context) (count_over_time({service="devguard-backend"} | json | level = "error" [5m]))
+{service="devguard-backend"} | json | context="gemini.failure"
+{service="devguard-backend"} | json | request_id="a1b2c3d4"
+{service="devguard-backend"} | json | level="error" | line_format "{{.message}}"
 ```
 
-See [MONITORING.md](MONITORING.md) for additional queries, troubleshooting steps, and instructions for adding new log events.
+---
+
+## Grafana Dashboard Panels
+
+The provisioned dashboard (`devguard.json`) contains 16 panels organized across the full width of the viewport:
+
+### Row 1 — Real-Time Overview
+
+| Panel | Type | Query Source | Description |
+|---|---|---|---|
+| Request Rate (req/s) | Time series | `rate(devguard_http_requests_total[1m])` | HTTP traffic by method (GET, POST, OPTIONS) |
+| Error Rate (4xx/5xx) | Time series | `rate(devguard_http_requests_total{status_code=~"4.."}[1m])` | Client error rate over time |
+| Active Requests | Gauge | `devguard_http_active_requests` | Current in-flight request count |
+| Average Review Latency | Gauge | `rate(devguard_review_duration_seconds_sum[5m]) / rate(devguard_review_duration_seconds_count[5m])` | Average end-to-end review time |
+
+### Row 2 — AI & Pipeline
+
+| Panel | Type | Query Source | Description |
+|---|---|---|---|
+| Review Pipeline | Time series | `rate(devguard_reviews_submitted_total[1m])` | Submission, completion, and failure rates |
+| Gemini API Call Rate & Latency | Time series | `rate(devguard_gemini_calls_total[1m])` | Call rate per model with success/failure/fallback |
+| Recent Error Logs | Logs (Loki) | `{service="devguard-backend"} \| json \| level="error"` | Real-time error log stream |
+| Gemini Failure Rate | Gauge | Failure ratio across all models | Percentage of Gemini calls that fail |
+| OAuth Login Success/Failure | Stat | `devguard_oauth_attempts_total` | Total OAuth login attempts |
+
+### Row 3 — Feedback & Health
+
+| Panel | Type | Query Source | Description |
+|---|---|---|---|
+| Feedback Accept vs Reject | Bar chart | `devguard_feedback_decisions_total` | Stacked accept/reject decisions |
+| Issues Flagged per Review (avg) | Stat + bar | `devguard_review_issues_total` | Average issues found per review |
+| Node.js Heap Usage | Time series | `devguard_nodejs_heap_space_size_used_bytes` | Heap used vs total over time |
+| Event Loop Lag | Time series | `devguard_nodejs_eventloop_lag_p99_seconds` | p50 and p99 event loop lag |
+
+### Row 4 — Deep Diagnostics
+
+| Panel | Type | Query Source | Description |
+|---|---|---|---|
+| Latency p50/p95/p99 per Route | Time series | `histogram_quantile(0.5, rate(devguard_http_request_duration_seconds_bucket[5m]))` | Per-route latency percentiles |
+| Pylint + Tree-sitter + Checkstyle Execution Time | Time series | `histogram_quantile(0.95, rate(devguard_pylint_duration_seconds_bucket[5m]))` | Static analysis tool latency |
+| Log Volume by Level (Loki) | Time series (Loki) | `sum by (level) (count_over_time({service="devguard-backend"} \| json [1m]))` | Log volume breakdown: info, warn, error |
 
 ---
 
-### Grafana Dashboard
+## Runtime Validation
 
-The dashboard is auto-provisioned from `monitoring/grafana/provisioning/dashboards/devguard.json`. Datasources are auto-provisioned from `datasources.yml`. No manual Grafana setup is required after `docker compose up -d`.
+The repository includes a 717-line runtime validation script (`server/runtime_validation.js`) that runs a 7-phase verification suite against the live stack:
 
-**16 panels** (verified from `monitoring/grafana/provisioning/dashboards/devguard.json`, in dashboard order):
+| Phase | What It Tests |
+|---|---|
+| 1. Connectivity | Backend `/health`, Prometheus `/api/v1/status/config`, Loki `/ready`, Grafana `/api/health` |
+| 2. Datasources | Grafana API — verifies Prometheus and Loki datasources are provisioned |
+| 3. Traffic Generation | Sends real HTTP and analysis requests to populate metrics |
+| 4. PromQL Queries | Runs every dashboard PromQL expression against `prometheus/api/v1/query` |
+| 5. LogQL Queries | Runs LogQL queries against `loki/api/v1/query_range` |
+| 6. Log Schema | Validates JSON structure, field presence, and secret sanitization |
+| 7. Load Test | 10-second sustained burst verifying throughput and error rates |
 
-| # | Panel title | Type |
-|---|---|---|
-| 1 | Request Rate (req/s) | Time series |
-| 2 | Error Rate (4xx / 5xx) | Time series |
-| 3 | Active Requests | Gauge |
-| 4 | Latency p50 / p95 / p99 per Route | Time series |
-| 5 | Gemini API Call Rate & Latency | Time series |
-| 6 | Gemini Failure Rate | Stat |
-| 7 | Issues Flagged per Review (avg) | Stat |
-| 8 | OAuth Login Success / Failure | Stat |
-| 9 | Average Review Latency | Gauge |
-| 10 | Review Pipeline: Submission / Completion / Failure Rate | Time series |
-| 11 | Pylint + Tree-sitter + Checkstyle Execution Time | Time series |
-| 12 | Feedback Accept vs Reject | Bar chart |
-| 13 | Node.js Heap Usage | Time series |
-| 14 | Event Loop Lag | Time series |
-| 15 | Log Volume by Level (Loki) | Bar chart |
-| 16 | Recent Error Logs (Last 50) | Log panel |
-
-All panel PromQL and LogQL queries were executed and validated by `server/runtime_validation.js` Phase 4 and Phase 5.
-
-Access Grafana at `http://localhost:3001` with credentials `admin` / `admin`.
-
----
-
-## Performance Characteristics
-
-**HTTP throughput:** ~3,000 req/s for lightweight endpoints on a single EC2 instance, as measured by the Phase 7 load test.
-
-**Analysis latency (single file):**
-- Normal conditions (Gemini API available): 2”“6 seconds
-- Rate-limited with exponential backoff (HTTP 429): 6”“45 seconds  
-- All three Gemini models failing: up to ~135 seconds before fallback (3 models Ã— 3 retries Ã— 45s timeout)
-
-**Multi-file queue:** Only one multi-file analysis runs at a time. This prevents concurrent Gemini API saturation and keeps server resources stable. Queue depth is visible in Grafana.
-
-**Loki batching:** Logs flush every 5 seconds, so there is up to a 5-second delay before new logs appear in Grafana's log panels.
-
-**Prometheus scrape interval:** 15 seconds. `rate()` queries over `[5m]` windows appear flat on low-traffic deployments — run the load test or shorten the rate window to generate visible data.
-
----
-
----
-
-# DevGuard-AI — Monitoring & Observability Guide
-
-## Quick Access
-
-| Service | URL | Credentials |
-|---|---|---|
-| **Grafana** | http://localhost:3001 | `admin` / `admin` |
-| **Prometheus** | http://localhost:9090 | — |
-| **Metrics endpoint** | http://localhost:5000/metrics | `admin` / `devguard-metrics` |
-| **Loki** | http://localhost:3100 | — |
-
----
-
-## Starting the Observability Stack
+Run with:
 
 ```bash
-docker-compose up -d
+node server/runtime_validation.js
 ```
 
-This starts 5 services: backend, Prometheus, Loki, Promtail, and Grafana. The Grafana dashboard is auto-provisioned — no manual setup required.
-
----
-
-## Dashboard Panels (16 panels)
-
-### HTTP Layer
-| Panel | Type | What it tracks |
-|---|---|---|
-| Request Rate (req/s) | Time Series | HTTP request rate by method (GET/POST/etc.) |
-| Error Rate (4xx / 5xx) | Time Series | Client and server error rates |
-| Active Requests | Gauge | In-flight requests (green/yellow/red at 0/10/50) |
-| Latency p50/p95/p99 per Route | Time Series | Request latency percentiles per API route |
-
-### Gemini AI
-| Panel | Type | What it tracks |
-|---|---|---|
-| Gemini API Call Rate & Latency | Time Series | Call rate by model + p95 latency |
-| Gemini Failure Rate | Stat | Percentage of failed Gemini calls |
-
-### Review Pipeline
-| Panel | Type | What it tracks |
-|---|---|---|
-| Review Pipeline Rates | Time Series | Submission, completion, and failure rates |
-| Average Review Latency | Gauge | Mean end-to-end review time (thresholds: 10s/30s) |
-| Issues Flagged per Review (avg) | Stat | Average issues found per review |
-
-### Static Analysis
-| Panel | Type | What it tracks |
-|---|---|---|
-| Pylint + Tree-sitter + Checkstyle Time | Time Series | p95 execution time for each tool |
-
-### Auth & Feedback
-| Panel | Type | What it tracks |
-|---|---|---|
-| OAuth Login Success/Failure | Stat | GitHub OAuth attempts by outcome |
-| Feedback Accept vs Reject | Bar Chart | Cumulative accept/reject decisions |
-
-### System Health
-| Panel | Type | What it tracks |
-|---|---|---|
-| Node.js Heap Usage | Time Series | V8 heap used vs total |
-| Event Loop Lag | Time Series | Event loop lag (mean + p99) |
-
-### Logs (Loki)
-| Panel | Type | What it tracks |
-|---|---|---|
-| Log Volume by Level | Bar Chart | Count of info/warn/error logs over time |
-| Recent Error Logs (Last 50) | Log Panel | Live error log stream |
-
----
-
-## Adding a New Metric
-
-### Step 1: Define in `server/utils/metrics.js`
-
-```javascript
-const myNewCounter = new client.Counter({
-  name: 'devguard_my_feature_total',
-  help: 'Description of what this counts',
-  labelNames: ['status'],
-  registers: [register],
-});
-
-// Add to module.exports at the bottom
-```
-
-### Step 2: Use in your route/utility
-
-```javascript
-const { myNewCounter } = require('../utils/metrics');
-
-// In your handler:
-myNewCounter.inc({ status: 'success' });
-```
-
-### Step 3: Add a Grafana panel
-
-Either edit `monitoring/grafana/provisioning/dashboards/devguard.json` or create panels in the Grafana UI.
-
-Example PromQL query for a rate panel:
-```
-sum(rate(devguard_my_feature_total[5m])) by (status)
-```
-
-### Step 4: Verify
-
-```bash
-curl -u admin:devguard-metrics http://localhost:5000/metrics | grep my_feature
-```
-
----
-
-## Querying Logs in Loki (LogQL)
-
-Access Loki logs via Grafana's Explore tab (http://localhost:3001/explore).
-
-### Common Queries
-
-**All error logs:**
-```logql
-{service="devguard-backend"} | json | level = "error"
-```
-
-**Gemini-related logs:**
-```logql
-{service="devguard-backend"} | json | context =~ "gemini.*"
-```
-
-**Slow reviews (>10 seconds):**
-```logql
-{service="devguard-backend"} | json | context = "analyze.single" | duration_sec > 10
-```
-
-**OAuth events:**
-```logql
-{service="devguard-backend"} | json | context = "github.oauth"
-```
-
-**Logs for a specific request:**
-```logql
-{service="devguard-backend"} | json | request_id = "a1b2c3d4"
-```
-
-**Error rate over time:**
-```logql
-sum by(context) (count_over_time({service="devguard-backend"} | json | level = "error" [5m]))
-```
-
----
-
-## Adding a New Log Event
-
-Use the structured logger — never `console.log`:
-
-```javascript
-const logger = require('../utils/logger');
-
-// Info level with context
-logger.info('Description of what happened', {
-  relevant_field: value,
-  duration_sec: elapsed.toFixed(3),
-  context: 'feature.action',     // Use dot notation: module.action
-});
-
-// Warning
-logger.warn('Something unexpected but recoverable', {
-  error: err.message,
-  context: 'feature.action',
-});
-
-// Error (include stack trace)
-logger.error('Something failed', {
-  error: err.message,
-  stack: err.stack,
-  context: 'feature.action',
-});
-```
-
-The `request_id` and `user_id` are automatically injected by the logger — no need to pass them.
+The script outputs a panel-by-panel pass/fail/warn report at the end.
 
 ---
 
 ## Troubleshooting
 
-### Prometheus not scraping metrics
-```bash
-# Check Prometheus targets
-curl http://localhost:9090/api/v1/targets
+### No data in Grafana panels
 
-# Test metrics endpoint directly
-curl -u admin:devguard-metrics http://localhost:5000/metrics
-```
+1. Check that Prometheus is scraping successfully: visit `http://localhost:9090/targets`.
+2. Verify the `/metrics` endpoint returns data: `curl -u admin:devguard-metrics http://localhost:5000/metrics`.
+3. Confirm the Grafana datasource is configured: `http://localhost:3001 → Configuration → Data sources`.
 
 ### Loki not receiving logs
-```bash
-# Check Loki readiness
-curl http://localhost:3100/ready
 
-# Verify LOKI_URL env var
-docker exec devguard-backend env | grep LOKI
-```
+1. Verify the `LOKI_URL` environment variable is set (Docker sets it to `http://loki:3100`).
+2. Check the Winston-Loki transport initialized: look for `Initializing Loki transport at:` in backend console output.
+3. Query Loki directly: `curl http://localhost:3100/loki/api/v1/query?query={service="devguard-backend"}`.
 
-### Viewing raw container logs
-```bash
-docker-compose logs -f devguard-backend
-docker-compose logs -f prometheus
-docker-compose logs -f loki
-```
+### High memory on t3.micro
+
+- Ensure the swap file is active: `swapon --show`.
+- Check container memory with `docker stats`.
+- Multi-file analysis is the heaviest operation — the serialized queue (`isProcessingMultiFile` flag) prevents concurrent processing.
 
 ---
-
-## Environment Variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `LOKI_URL` | *(none)* | Loki endpoint. Set to `http://loki:3100` in Docker |
-| `METRICS_USER` | `admin` | Basic auth username for `/metrics` |
-| `METRICS_PASS` | `devguard-metrics` | Basic auth password for `/metrics` |
-| `LOG_LEVEL` | `info` | Winston log level (`error`, `warn`, `info`, `debug`) |
-
